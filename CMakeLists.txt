@@ -9,6 +9,10 @@ find_package(nlohmann_json CONFIG REQUIRED)
 
 add_executable(maze3d game.cpp)
 
+if(MSVC)
+    target_compile_options(maze3d PRIVATE /utf-8)
+endif()
+
 target_link_libraries(maze3d PRIVATE
     SDL2::SDL2
     SDL2::SDL2main

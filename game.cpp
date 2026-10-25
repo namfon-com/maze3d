@@ -127,11 +127,29 @@ TextureAsset loadTexture(SDL_Renderer* renderer, const fs::path& path) {
     return {texture, width, height};
 }
 
+
+constexpr int kViewWidth = 960;
+constexpr int kViewHeight = 600;
+constexpr double kPi = 3.14159265358979323846;
+// カメラ平面の半幅。1.0 で水平視野角 90°（現在セルの左右の壁が画面端に入る）
+constexpr double kPlane = 1.0;
+// カメラをセル中心から後方へずらす量。0.5 でセル後端 = Wizardry/BlackOnyx 風の視点
+constexpr double kCameraBack = 0.5;
+constexpr double kMoveDuration = 0.20;
+constexpr double kTurnDuration = 0.18;
+constexpr double kTurnBackDuration = 0.30;
+
+// facing: 0=東(+x) 1=南(+y) 2=西(-x) 3=北(-y)。画面座標系(y下向き)なので角度 = facing * 90°
+constexpr int kDirX[4] = {1, 0, -1, 0};
+constexpr int kDirY[4] = {0, 1, 0, -1};
+
 struct Hit {
     bool hit = false;
     std::string type;
-    bool horizontal = false;
-    double distance = 0;
+    bool vertical = false;   // x 軸に垂直な辺(vEdge)に当たった
+    int edgeX = 0;
+    int edgeY = 0;
+    double distance = 0;     // カメラ平面からの垂直距離
     double wallX = 0;
 };
 
@@ -147,20 +165,19 @@ std::string vEdge(const Floor& floor, int x, int y) {
     return found == floor.vEdges.end() ? "" : found->second;
 }
 
-Hit castRay(const Floor& floor, double playerX, double playerY,
+// rayDirection は正規化しない (direction + plane * camera)。このとき DDA の距離がそのまま垂直距離になる
+Hit castRay(const Floor& floor, double originX, double originY, int mapX, int mapY,
             double rayDirectionX, double rayDirectionY) {
-    int mapX = static_cast<int>(std::floor(playerX));
-    int mapY = static_cast<int>(std::floor(playerY));
     const double deltaX = rayDirectionX == 0 ? 1e30 : std::abs(1.0 / rayDirectionX);
     const double deltaY = rayDirectionY == 0 ? 1e30 : std::abs(1.0 / rayDirectionY);
     int stepX = rayDirectionX < 0 ? -1 : 1;
     int stepY = rayDirectionY < 0 ? -1 : 1;
     double sideX = rayDirectionX < 0
-        ? (playerX - mapX) * deltaX
-        : (mapX + 1.0 - playerX) * deltaX;
+        ? (originX - mapX) * deltaX
+        : (mapX + 1.0 - originX) * deltaX;
     double sideY = rayDirectionY < 0
-        ? (playerY - mapY) * deltaY
-        : (mapY + 1.0 - playerY) * deltaY;
+        ? (originY - mapY) * deltaY
+        : (mapY + 1.0 - originY) * deltaY;
 
     for (int step = 0; step < 128; ++step) {
         bool verticalSide = false;
@@ -175,27 +192,30 @@ Hit castRay(const Floor& floor, double playerX, double playerY,
             rawDistance = sideY;
             sideY += deltaY;
         }
+        bool outside = mapX < 0 || mapX >= floor.width || mapY < 0 || mapY >= floor.height;
 
-        if (mapX < 0 || mapX >= floor.width || mapY < 0 || mapY >= floor.height) {
-            return {true, "wall", verticalSide, std::max(rawDistance, 0.001), 0.0};
-        }
-
+        Hit hit;
+        hit.vertical = verticalSide;
         if (verticalSide) {
-            int boundaryX = stepX > 0 ? mapX : mapX + 1;
-            std::string edge = vEdge(floor, boundaryX, mapY);
-            if (!edge.empty()) {
-                double wallX = playerY + rawDistance * rayDirectionY;
-                wallX -= std::floor(wallX);
-                return {true, edge, false, std::max(rawDistance, 0.001), wallX};
-            }
+            hit.edgeX = stepX > 0 ? mapX : mapX + 1;
+            hit.edgeY = mapY;
+            hit.type = vEdge(floor, hit.edgeX, hit.edgeY);
+            hit.wallX = originY + rawDistance * rayDirectionY;
+            hit.wallX -= std::floor(hit.wallX);
+            if (stepX < 0) hit.wallX = 1.0 - hit.wallX;
         } else {
-            int boundaryY = stepY > 0 ? mapY : mapY + 1;
-            std::string edge = hEdge(floor, mapX, boundaryY);
-            if (!edge.empty()) {
-                double wallX = playerX + rawDistance * rayDirectionX;
-                wallX -= std::floor(wallX);
-                return {true, edge, true, std::max(rawDistance, 0.001), wallX};
-            }
+            hit.edgeX = mapX;
+            hit.edgeY = stepY > 0 ? mapY : mapY + 1;
+            hit.type = hEdge(floor, hit.edgeX, hit.edgeY);
+            hit.wallX = originX + rawDistance * rayDirectionX;
+            hit.wallX -= std::floor(hit.wallX);
+            if (stepY > 0) hit.wallX = 1.0 - hit.wallX;
+        }
+        if (hit.type.empty() && outside) hit.type = "wall";
+        if (!hit.type.empty()) {
+            hit.hit = true;
+            hit.distance = std::max(rawDistance, 0.001);
+            return hit;
         }
     }
     return {};
@@ -226,59 +246,128 @@ bool moveBlocked(const Floor& floor, int cellX, int cellY, int stepX, int stepY)
     return false;
 }
 
-void drawPseudo3D(SDL_Renderer* renderer, const Floor& floor, const TextureAsset& floorTexture,
+// 距離による減光 (遠くほど闇に沈む)
+double distanceShade(double distance) {
+    return std::clamp(1.1 - distance * 0.16, 0.08, 1.0);
+}
+
+Uint8 shadeChannel(int value, double shade) {
+    return static_cast<Uint8>(std::clamp(static_cast<int>(value * shade), 0, 255));
+}
+
+void drawPseudo3D(SDL_Renderer* renderer, const Floor& floor,
                   const TextureAsset& wallTexture, const TextureAsset& doorTexture,
-                  double playerX, double playerY, double directionX, double directionY) {
-    const int width = 960;
-    const int height = 600;
-    SDL_SetRenderDrawColor(renderer, 20, 18, 16, 255);
+                  double viewX, double viewY, double angle) {
+    const int width = kViewWidth;
+    const int height = kViewHeight;
+    const int horizon = height / 2;
+    // 距離 1 の壁 1 マス分が画面上で何ピクセルになるか
+    const double projection = (width / 2.0) / kPlane;
+
+    double directionX = std::cos(angle);
+    double directionY = std::sin(angle);
+    if (std::abs(directionX) < 1e-9) directionX = 0.0;
+    if (std::abs(directionY) < 1e-9) directionY = 0.0;
+    const double planeX = -directionY * kPlane;
+    const double planeY = directionX * kPlane;
+
+    const double cameraX = viewX - directionX * kCameraBack;
+    const double cameraY = viewY - directionY * kCameraBack;
+    // カメラはセル境界上に乗ることがあるので、前方へ微小にずらした位置で所属セルを決める
+    const int startCellX = static_cast<int>(std::floor(cameraX + directionX * 1e-6));
+    const int startCellY = static_cast<int>(std::floor(cameraY + directionY * 1e-6));
+
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
-    SDL_Rect ceiling{0, 0, width, height / 2};
-    SDL_SetRenderDrawColor(renderer, 36, 34, 31, 255);
-    SDL_RenderFillRect(renderer, &ceiling);
-
-    if (floorTexture.texture) {
-        SDL_Rect floorRect{0, height / 2, width, height / 2};
-        SDL_RenderCopy(renderer, floorTexture.texture, nullptr, &floorRect);
-    } else {
-        SDL_Rect floorRect{0, height / 2, width, height / 2};
-        SDL_SetRenderDrawColor(renderer, 12, 12, 12, 255);
-        SDL_RenderFillRect(renderer, &floorRect);
+    // 床・天井: 行ごとの距離で減光したグラデーション
+    for (int row = 1; row <= horizon; ++row) {
+        double rowDistance = projection / (2.0 * (row - 0.5));
+        double shade = distanceShade(rowDistance);
+        SDL_SetRenderDrawColor(renderer, shadeChannel(70, shade), shadeChannel(62, shade), shadeChannel(52, shade), 255);
+        SDL_RenderDrawLine(renderer, 0, horizon + row - 1, width - 1, horizon + row - 1);
+        SDL_SetRenderDrawColor(renderer, shadeChannel(40, shade), shadeChannel(40, shade), shadeChannel(46, shade), 255);
+        SDL_RenderDrawLine(renderer, 0, horizon - row, width - 1, horizon - row);
     }
 
-    const double planeX = -directionY * 0.66;
-    const double planeY = directionX * 0.66;
+    struct Column {
+        bool hit = false;
+        std::uint64_t id = 0;
+        int top = 0;
+        int bottom = 0;
+        double distance = 0;
+    };
+    std::vector<Column> columns(width);
+
     for (int column = 0; column < width; ++column) {
-        double camera = 2.0 * column / width - 1.0;
+        double camera = 2.0 * (column + 0.5) / width - 1.0;
         double rayX = directionX + planeX * camera;
         double rayY = directionY + planeY * camera;
-        Hit hit = castRay(floor, playerX, playerY, rayX, rayY);
-        if (!hit.hit || hit.distance <= 0.001) continue;
-        double rayLength = std::sqrt(rayX * rayX + rayY * rayY);
-        double perpendicularDistance = hit.distance;
-        if (rayLength > 0.001) {
-            perpendicularDistance *= std::max(0.0, (directionX * rayX + directionY * rayY) / rayLength);
-        }
-        int wallHeight = static_cast<int>(height / std::max(perpendicularDistance, 0.001) * 0.9);
-        int top = std::max(0, height / 2 - wallHeight / 2);
-        int bottom = std::min(height, height / 2 + wallHeight / 2);
-        TextureAsset texture = hit.type == "door" ? doorTexture : wallTexture;
+        Hit hit = castRay(floor, cameraX, cameraY, startCellX, startCellY, rayX, rayY);
+        if (!hit.hit) continue;
+
+        double wallHeight = projection / hit.distance;
+        int top = static_cast<int>(std::floor(horizon - wallHeight / 2));
+        int bottom = static_cast<int>(std::ceil(horizon + wallHeight / 2));
+        Column& info = columns[column];
+        info.hit = true;
+        info.id = edgeKey(hit.edgeX, hit.edgeY) ^ (hit.vertical ? (1ull << 63) : 0);
+        info.top = top;
+        info.bottom = bottom;
+        info.distance = hit.distance;
+
+        double shade = distanceShade(hit.distance) * (hit.vertical ? 1.0 : 0.78);
+        const TextureAsset& texture = hit.type == "door" ? doorTexture : wallTexture;
         SDL_Rect stripe{column, top, 1, bottom - top};
         if (texture.texture) {
             int sourceX = std::clamp(static_cast<int>(hit.wallX * texture.width), 0, texture.width - 1);
             SDL_Rect source{sourceX, 0, 1, texture.height};
+            Uint8 mod = shadeChannel(255, shade);
+            SDL_SetTextureColorMod(texture.texture, mod, mod, mod);
             SDL_RenderCopy(renderer, texture.texture, &source, &stripe);
         } else {
-            if (hit.type == "door") SDL_SetRenderDrawColor(renderer, 230, 190, 70, 255);
-            else SDL_SetRenderDrawColor(renderer, 95, 91, 86, 255);
+            if (hit.type == "door") SDL_SetRenderDrawColor(renderer, shadeChannel(230, shade), shadeChannel(190, shade), shadeChannel(70, shade), 255);
+            else SDL_SetRenderDrawColor(renderer, shadeChannel(120, shade), shadeChannel(115, shade), shadeChannel(108, shade), 255);
             SDL_RenderFillRect(renderer, &stripe);
         }
+    }
+    if (wallTexture.texture) SDL_SetTextureColorMod(wallTexture.texture, 255, 255, 255);
+    if (doorTexture.texture) SDL_SetTextureColorMod(doorTexture.texture, 255, 255, 255);
+
+    // アウトライン: 壁の上下端と、辺(=1マス分の壁)の切れ目
+    std::vector<SDL_Point> outline;
+    outline.reserve(width * 4);
+    for (int column = 0; column < width; ++column) {
+        const Column& info = columns[column];
+        if (!info.hit) continue;
+        if (info.top >= 0) {
+            outline.push_back({column, info.top});
+            outline.push_back({column, info.top + 1});
+        }
+        if (info.bottom <= height) {
+            outline.push_back({column, info.bottom - 1});
+            outline.push_back({column, info.bottom - 2});
+        }
+    }
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderDrawPoints(renderer, outline.data(), static_cast<int>(outline.size()));
+    for (int column = 1; column < width; ++column) {
+        const Column& left = columns[column - 1];
+        const Column& right = columns[column];
+        if (left.id == right.id && left.hit == right.hit) continue;
+        // 手前側(背の高い方)の列に縦線を引く
+        bool useLeft = left.hit && (!right.hit || left.distance < right.distance);
+        const Column& nearer = useLeft ? left : right;
+        if (!nearer.hit) continue;
+        int x = useLeft ? column - 1 : column;
+        SDL_Rect line{x, nearer.top, 2, nearer.bottom - nearer.top};
+        if (useLeft) line.x -= 1;
+        SDL_RenderFillRect(renderer, &line);
     }
 }
 
 void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& map,
-                   double playerX, double playerY, double directionX, double directionY) {
+                   double playerX, double playerY, double angle) {
     const int windowWidth = 420;
     const int windowHeight = 450;
     SDL_SetRenderDrawColor(renderer, 28, 29, 27, 255);
@@ -296,34 +385,26 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
     const int originY = titleHeight + (availableHeight - gridHeight) / 2;
 
     SDL_Rect background{originX, originY, gridWidth, gridHeight};
-    SDL_SetRenderDrawColor(renderer, 248, 246, 238, 255);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderFillRect(renderer, &background);
 
-    SDL_SetRenderDrawColor(renderer, 190, 188, 180, 255);
-    for (int x = 0; x <= floor.width; ++x) {
-        SDL_RenderDrawLine(renderer, originX + x * cellSize, originY,
-                           originX + x * cellSize, originY + gridHeight);
-    }
-    for (int y = 0; y <= floor.height; ++y) {
-        SDL_RenderDrawLine(renderer, originX, originY + y * cellSize,
-                           originX + gridWidth, originY + y * cellSize);
-    }
-
+    auto setEdgeColor = [renderer](const std::string& type) {
+        if (type == "door") SDL_SetRenderDrawColor(renderer, 230, 190, 70, 255);
+        else SDL_SetRenderDrawColor(renderer, 220, 218, 210, 255);
+    };
     for (const auto& edge : floor.hEdges) {
         int x = static_cast<int>(edge.first >> 32);
         int y = static_cast<int>(edge.first & 0xffffffffu);
-        if (edge.second == "door") SDL_SetRenderDrawColor(renderer, 230, 190, 70, 255);
-        else SDL_SetRenderDrawColor(renderer, 38, 38, 38, 255);
-        SDL_RenderDrawLine(renderer, originX + x * cellSize, originY + y * cellSize,
-                           originX + (x + 1) * cellSize, originY + y * cellSize);
+        setEdgeColor(edge.second);
+        SDL_Rect line{originX + x * cellSize, originY + y * cellSize - 1, cellSize + 1, 2};
+        SDL_RenderFillRect(renderer, &line);
     }
     for (const auto& edge : floor.vEdges) {
         int x = static_cast<int>(edge.first >> 32);
         int y = static_cast<int>(edge.first & 0xffffffffu);
-        if (edge.second == "door") SDL_SetRenderDrawColor(renderer, 230, 190, 70, 255);
-        else SDL_SetRenderDrawColor(renderer, 38, 38, 38, 255);
-        SDL_RenderDrawLine(renderer, originX + x * cellSize, originY + y * cellSize,
-                           originX + x * cellSize, originY + (y + 1) * cellSize);
+        setEdgeColor(edge.second);
+        SDL_Rect line{originX + x * cellSize - 1, originY + y * cellSize, 2, cellSize + 1};
+        SDL_RenderFillRect(renderer, &line);
     }
 
     for (const Stair& stair : map.stairs) {
@@ -350,6 +431,8 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
         }
     }
 
+    const double directionX = std::cos(angle);
+    const double directionY = std::sin(angle);
     double playerCenterX = originX + (playerX * cellSize);
     double playerCenterY = originY + (playerY * cellSize);
     int radius = std::max(4, cellSize / 3);
@@ -362,15 +445,13 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
     SDL_SetRenderDrawColor(renderer, 91, 141, 239, 255);
     SDL_RenderFillRect(renderer, &playerRect);
 
-    SDL_SetRenderDrawColor(renderer, 20, 65, 150, 255);
+    SDL_SetRenderDrawColor(renderer, 200, 220, 255, 255);
     int arrowX = static_cast<int>(playerCenterX + directionX * cellSize * 0.65);
     int arrowY = static_cast<int>(playerCenterY + directionY * cellSize * 0.65);
     for (int offset = -1; offset <= 1; ++offset) {
         SDL_RenderDrawLine(renderer, static_cast<int>(playerCenterX) - offset, static_cast<int>(playerCenterY) + offset,
                            arrowX - offset, arrowY + offset);
     }
-
-    SDL_SetRenderDrawColor(renderer, 245, 245, 240, 255);
 
     SDL_RenderPresent(renderer);
 }
@@ -399,6 +480,37 @@ fs::path findMapPath(int argc, char* argv[], const fs::path& exeDir) {
     return candidates[0];
 }
 
+enum class Action { None, Forward, TurnLeft, TurnRight, TurnBack };
+
+Action actionForKey(SDL_Scancode key) {
+    switch (key) {
+    case SDL_SCANCODE_UP: case SDL_SCANCODE_W: return Action::Forward;
+    case SDL_SCANCODE_LEFT: case SDL_SCANCODE_A: return Action::TurnLeft;
+    case SDL_SCANCODE_RIGHT: case SDL_SCANCODE_D: return Action::TurnRight;
+    case SDL_SCANCODE_DOWN: case SDL_SCANCODE_S: return Action::TurnBack;
+    default: return Action::None;
+    }
+}
+
+Action heldAction() {
+    const Uint8* keys = SDL_GetKeyboardState(nullptr);
+    if (keys[SDL_SCANCODE_UP] || keys[SDL_SCANCODE_W]) return Action::Forward;
+    if (keys[SDL_SCANCODE_LEFT] || keys[SDL_SCANCODE_A]) return Action::TurnLeft;
+    if (keys[SDL_SCANCODE_RIGHT] || keys[SDL_SCANCODE_D]) return Action::TurnRight;
+    return Action::None;  // 180° ターンは押しっぱなしで連続させない
+}
+
+// 論理位置(セル+向き)は入力時に即確定し、表示位置だけをアニメーションで追従させる
+struct Motion {
+    bool active = false;
+    double progress = 0;
+    double duration = 1;
+    double fromX = 0, fromY = 0, toX = 0, toY = 0;
+    double fromAngle = 0, toAngle = 0;
+};
+
+double smoothstep(double t) { return t * t * (3.0 - 2.0 * t); }
+
 int main(int argc, char* argv[]) {
     fs::path exeDir = executableDirectory();
     try {
@@ -407,10 +519,10 @@ int main(int argc, char* argv[]) {
         if ((IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG) & (IMG_INIT_PNG | IMG_INIT_JPG)) == 0)
             throw std::runtime_error(IMG_GetError());
 
-        SDL_Window* window = SDL_CreateWindow("maze3d - cell movement / 90 degree turn", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                               960, 600, SDL_WINDOW_SHOWN);
+        SDL_Window* window = SDL_CreateWindow("maze3d", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                               kViewWidth, kViewHeight, SDL_WINDOW_SHOWN);
         if (!window) throw std::runtime_error(SDL_GetError());
-        SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+        SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
         if (!renderer) throw std::runtime_error(SDL_GetError());
 
         SDL_Window* previewWindow = SDL_CreateWindow("map preview - current position", SDL_WINDOWPOS_UNDEFINED,
@@ -421,6 +533,7 @@ int main(int argc, char* argv[]) {
             SDL_DestroyWindow(previewWindow);
             throw std::runtime_error(SDL_GetError());
         }
+        SDL_RaiseWindow(window);
 
         std::string currentFloorId = map.spawn.floorId;
         const Floor* currentFloor = findFloor(map, currentFloorId);
@@ -429,164 +542,114 @@ int main(int argc, char* argv[]) {
             currentFloorId = currentFloor->id;
         }
         if (!currentFloor) throw std::runtime_error("Map contains no valid floor");
-        double playerX = map.spawn.x + 0.5;
-        double playerY = map.spawn.y + 0.5;
-        double directionX = -1.0;
-        double directionY = 0.0;
-        bool moving = false;
-        double moveProgress = 0.0;
-        double moveFromX = playerX;
-        double moveFromY = playerY;
-        double moveToX = playerX;
-        double moveToY = playerY;
 
-        bool turning = false;
-        double turnProgress = 0.0;
-        double turnFromX = directionX;
-        double turnFromY = directionY;
-        double turnToX = directionX;
-        double turnToY = directionY;
+        int cellX = map.spawn.x;
+        int cellY = map.spawn.y;
+        int facing = 2;  // 西向きで開始
+        double viewX = cellX + 0.5;
+        double viewY = cellY + 0.5;
+        double viewAngle = facing * kPi / 2;
+        Motion motion;
+        Action pendingAction = Action::None;
 
         fs::path base = exeDir / "assets/textures";
         if (!fs::exists(base)) base = fs::path("assets/textures");
-        fs::path floorImage = findAsset(base / "floor", map.spawn.floorId + ".png");
         fs::path wallImage = findAsset(base / "wall", "stone_dark.png");
         fs::path doorImage = findAsset(base / "door", "door.png");
-        TextureAsset floorTexture = loadTexture(renderer, floorImage);
         TextureAsset wallTexture = loadTexture(renderer, wallImage);
         TextureAsset doorTexture = loadTexture(renderer, doorImage);
+
+        auto startAction = [&](Action action) {
+            if (action == Action::None) return;
+            double angle = facing * kPi / 2;
+            motion = {};
+            motion.fromX = motion.toX = cellX + 0.5;
+            motion.fromY = motion.toY = cellY + 0.5;
+            motion.fromAngle = motion.toAngle = angle;
+            if (action == Action::Forward) {
+                int stepX = kDirX[facing];
+                int stepY = kDirY[facing];
+                if (moveBlocked(*currentFloor, cellX, cellY, stepX, stepY)) return;
+                cellX += stepX;
+                cellY += stepY;
+                motion.toX = cellX + 0.5;
+                motion.toY = cellY + 0.5;
+                motion.duration = kMoveDuration;
+            } else if (action == Action::TurnLeft) {
+                facing = (facing + 3) % 4;
+                motion.toAngle = angle - kPi / 2;
+                motion.duration = kTurnDuration;
+            } else if (action == Action::TurnRight) {
+                facing = (facing + 1) % 4;
+                motion.toAngle = angle + kPi / 2;
+                motion.duration = kTurnDuration;
+            } else if (action == Action::TurnBack) {
+                facing = (facing + 2) % 4;
+                motion.toAngle = angle + kPi;
+                motion.duration = kTurnBackDuration;
+            }
+            motion.active = true;
+        };
 
         bool running = true;
         Uint32 previousTime = SDL_GetTicks();
         while (running) {
             Uint32 currentTime = SDL_GetTicks();
-            double frameTime = (currentTime - previousTime) / 1000.0;
+            double frameTime = std::min((currentTime - previousTime) / 1000.0, 0.05);
             previousTime = currentTime;
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
                 if (event.type == SDL_QUIT) running = false;
                 if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) running = false;
-                if (event.type == SDL_KEYDOWN) {
-                    if (event.key.keysym.scancode == SDL_SCANCODE_Q) running = false;
-                    if (!moving && !turning && !event.key.repeat) {
-                        if (event.key.keysym.scancode == SDL_SCANCODE_LEFT || event.key.keysym.scancode == SDL_SCANCODE_A) {
-                            turnFromX = directionX;
-                            turnFromY = directionY;
-                            turnToX = directionY;
-                            turnToY = -directionX;
-                            double length = std::sqrt(turnToX * turnToX + turnToY * turnToY);
-                            if (length > 0.001) {
-                                turnToX /= length;
-                                turnToY /= length;
-                            }
-                            turnProgress = 0.0;
-                            turning = true;
-                        }
-                        if (event.key.keysym.scancode == SDL_SCANCODE_RIGHT || event.key.keysym.scancode == SDL_SCANCODE_D) {
-                            turnFromX = directionX;
-                            turnFromY = directionY;
-                            turnToX = -directionY;
-                            turnToY = directionX;
-                            double length = std::sqrt(turnToX * turnToX + turnToY * turnToY);
-                            if (length > 0.001) {
-                                turnToX /= length;
-                                turnToY /= length;
-                            }
-                            turnProgress = 0.0;
-                            turning = true;
-                        }
-                        if (event.key.keysym.scancode == SDL_SCANCODE_DOWN || event.key.keysym.scancode == SDL_SCANCODE_S) {
-                            turnFromX = directionX;
-                            turnFromY = directionY;
-                            turnToX = -directionX;
-                            turnToY = -directionY;
-                            turnProgress = 0.0;
-                            turning = true;
-                        }
-                        int forwardSign = 0;
-                        if (event.key.keysym.scancode == SDL_SCANCODE_UP || event.key.keysym.scancode == SDL_SCANCODE_W) forwardSign = 1;
-                        if (forwardSign != 0) {
-                            int baseX = static_cast<int>(std::floor(playerX));
-                            int baseY = static_cast<int>(std::floor(playerY));
-                            int directionStepX = std::abs(directionX) > 0.5 ? (directionX > 0 ? 1 : -1) : 0;
-                            int directionStepY = std::abs(directionY) > 0.5 ? (directionY > 0 ? 1 : -1) : 0;
-                            int stepX = directionStepX * forwardSign;
-                            int stepY = directionStepY * forwardSign;
-                            if (!moveBlocked(*currentFloor, baseX, baseY, stepX, stepY)) {
-                                double targetX = baseX + 0.5 + stepX;
-                                double targetY = baseY + 0.5 + stepY;
-                                moveFromX = playerX;
-                                moveFromY = playerY;
-                                moveToX = targetX;
-                                moveToY = targetY;
-                                moveProgress = 0.0;
-                                moving = true;
-                            }
-                        }
-                    }
-                    if (event.key.keysym.scancode == SDL_SCANCODE_E) {
-                        int cellX = static_cast<int>(std::floor(playerX));
-                        int cellY = static_cast<int>(std::floor(playerY));
+                if (event.type == SDL_KEYDOWN && !event.key.repeat) {
+                    SDL_Scancode key = event.key.keysym.scancode;
+                    if (key == SDL_SCANCODE_Q || key == SDL_SCANCODE_ESCAPE) running = false;
+                    Action action = actionForKey(key);
+                    if (action != Action::None) pendingAction = action;  // アニメ中の入力は1つだけ先行受付
+                    if (key == SDL_SCANCODE_E && !motion.active) {
                         for (const Stair& stair : map.stairs) {
-                            for (const StairEnd& end : stair.ends) {
-                                if (end.floorId == currentFloorId && end.x == cellX && end.y == cellY) {
-                                    for (const StairEnd& destination : stair.ends) {
-                                        if (destination.floorId == currentFloorId && destination.x == cellX && destination.y == cellY) continue;
-                                        currentFloorId = destination.floorId;
-                                        currentFloor = findFloor(map, currentFloorId);
-                                        playerX = destination.x + 0.5;
-                                        playerY = destination.y + 0.5;
-                                        break;
-                                    }
-                                    break;
-                                }
-                            }
+                            const StairEnd* destination = nullptr;
+                            if (stair.ends[0].floorId == currentFloorId && stair.ends[0].x == cellX && stair.ends[0].y == cellY)
+                                destination = &stair.ends[1];
+                            else if (stair.ends[1].floorId == currentFloorId && stair.ends[1].x == cellX && stair.ends[1].y == cellY)
+                                destination = &stair.ends[0];
+                            if (!destination) continue;
+                            const Floor* target = findFloor(map, destination->floorId);
+                            if (!target) break;
+                            currentFloorId = destination->floorId;
+                            currentFloor = target;
+                            cellX = destination->x;
+                            cellY = destination->y;
+                            viewX = cellX + 0.5;
+                            viewY = cellY + 0.5;
+                            break;
                         }
                     }
                 }
             }
 
-            if (moving) {
-                moveProgress = std::min(1.0, moveProgress + std::min(frameTime, 0.05) / 0.18);
-                double eased = moveProgress * moveProgress * (3.0 - 2.0 * moveProgress);
-                playerX = moveFromX + (moveToX - moveFromX) * eased;
-                playerY = moveFromY + (moveToY - moveFromY) * eased;
-                if (moveProgress >= 1.0) {
-                    playerX = moveToX;
-                    playerY = moveToY;
-                    moving = false;
-                }
+            if (motion.active) {
+                motion.progress = std::min(1.0, motion.progress + frameTime / motion.duration);
+                double eased = smoothstep(motion.progress);
+                viewX = motion.fromX + (motion.toX - motion.fromX) * eased;
+                viewY = motion.fromY + (motion.toY - motion.fromY) * eased;
+                viewAngle = motion.fromAngle + (motion.toAngle - motion.fromAngle) * eased;
+                if (motion.progress >= 1.0) motion.active = false;
+            }
+            if (!motion.active) {
+                viewX = cellX + 0.5;
+                viewY = cellY + 0.5;
+                viewAngle = facing * kPi / 2;
+                Action next = pendingAction != Action::None ? pendingAction : heldAction();
+                pendingAction = Action::None;
+                startAction(next);
             }
 
-            if (turning) {
-                turnProgress = std::min(1.0, turnProgress + std::min(frameTime, 0.05) / 0.16);
-                double eased = turnProgress * turnProgress * (3.0 - 2.0 * turnProgress);
-                double currentX = turnFromX + (turnToX - turnFromX) * eased;
-                double currentY = turnFromY + (turnToY - turnFromY) * eased;
-                double length = std::sqrt(currentX * currentX + currentY * currentY);
-                if (length > 0.001) {
-                    directionX = currentX / length;
-                    directionY = currentY / length;
-                }
-                if (turnProgress >= 1.0) {
-                    directionX = turnToX;
-                    directionY = turnToY;
-                    double cardinalLength = std::sqrt(directionX * directionX + directionY * directionY);
-                    if (cardinalLength > 0.001) {
-                        directionX /= cardinalLength;
-                        directionY /= cardinalLength;
-                    }
-                    turning = false;
-                }
-            }
-
-            drawPseudo3D(renderer, *currentFloor, floorTexture, wallTexture, doorTexture,
-                         playerX, playerY, directionX, directionY);
+            drawPseudo3D(renderer, *currentFloor, wallTexture, doorTexture, viewX, viewY, viewAngle);
             SDL_RenderPresent(renderer);
-            drawMapPreview(previewRenderer, *currentFloor, map, playerX, playerY, directionX, directionY);
+            drawMapPreview(previewRenderer, *currentFloor, map, viewX, viewY, viewAngle);
         }
 
-        if (floorTexture.texture) SDL_DestroyTexture(floorTexture.texture);
         if (wallTexture.texture) SDL_DestroyTexture(wallTexture.texture);
         if (doorTexture.texture) SDL_DestroyTexture(doorTexture.texture);
         SDL_DestroyRenderer(previewRenderer);
