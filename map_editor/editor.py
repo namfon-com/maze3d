@@ -1,0 +1,843 @@
+from __future__ import annotations
+
+import json
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+CELL_SIZE = 48
+GRID_ORIGIN = 40
+MIN_MAP_SIZE = 1
+MAX_MAP_SIZE = 200
+EDGE_TYPES = {"wall", "door"}
+
+
+def validate_size(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} は整数で指定してください。")
+    if not MIN_MAP_SIZE <= value <= MAX_MAP_SIZE:
+        raise ValueError(f"{label} は {MIN_MAP_SIZE}〜{MAX_MAP_SIZE} の範囲で指定してください。")
+    return value
+
+
+def parse_coordinate(value: Any, label: str) -> tuple[int, int]:
+    if (not isinstance(value, list) or len(value) != 2
+            or any(isinstance(part, bool) or not isinstance(part, int) for part in value)):
+        raise ValueError(f"{label}.locate は整数2個の配列で指定してください。")
+    return value[0], value[1]
+
+
+class MapCanvas(tk.Canvas):
+    def __init__(self, master: tk.Misc, editor: "MapEditor", **kwargs: Any) -> None:
+        super().__init__(master, background="#fbfaf7", highlightthickness=0, **kwargs)
+        self.editor = editor
+        self.press_point: tuple[float, float] | None = None
+        self.last_grid_vertex: tuple[int, int] | None = None
+        self.dragged = False
+        self.bind("<Button-1>", self._press)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<ButtonRelease-1>", self._release)
+        self.bind("<MouseWheel>", self._wheel_floor)
+        self.bind("<Configure>", lambda _event: self.redraw())
+
+    def _press(self, event: tk.Event) -> None:
+        self.press_point = (self.canvasx(event.x), self.canvasy(event.y))
+        self.last_grid_vertex = None
+        self.dragged = False
+
+    def _drag(self, event: tk.Event) -> None:
+        if self.press_point is None:
+            return
+        x, y = self.canvasx(event.x), self.canvasy(event.y)
+        dx, dy = x - self.press_point[0], y - self.press_point[1]
+        if self.editor.tool.get() in ("wall", "door"):
+            if not self.dragged and max(abs(dx), abs(dy)) >= 7:
+                self.dragged = True
+                start_gx, start_gy = self._grid_position(*self.press_point)
+                self.last_grid_vertex = (round(start_gx), round(start_gy))
+            if self.dragged:
+                self._continue_edge_drag(x, y)
+        elif self.editor.tool.get() == "erase":
+            self.dragged = True
+            self._apply_erase(x, y)
+
+    def _wheel_floor(self, event: tk.Event) -> str:
+        self.editor.switch_floor_by_wheel(event.delta)
+        return "break"
+
+    def _release(self, event: tk.Event) -> None:
+        if self.press_point is None:
+            return
+        x, y = self.canvasx(event.x), self.canvasy(event.y)
+        tool = self.editor.tool.get()
+        if tool == "wall" or tool == "door":
+            if self.dragged:
+                self._continue_edge_drag(x, y)
+            else:
+                self._place_nearest_edge(x, y, "wall" if tool == "wall" else "door")
+        elif tool == "stair":
+            self._place_cell_tool(x, y, self.editor.place_stair)
+        elif tool == "spawn":
+            self._place_cell_tool(x, y, self.editor.place_spawn)
+        elif tool == "erase" and not self.dragged:
+            self._apply_erase(x, y)
+        self.press_point = None
+        self.last_grid_vertex = None
+        self.dragged = False
+
+    def _grid_position(self, x: float, y: float) -> tuple[float, float]:
+        return (x - GRID_ORIGIN) / CELL_SIZE, (y - GRID_ORIGIN) / CELL_SIZE
+
+    def _in_work_area(self, gx: float, gy: float) -> bool:
+        floor = self.editor.current_floor
+        work_width = min(MAX_MAP_SIZE, floor["width"] + 4)
+        work_height = min(MAX_MAP_SIZE, floor["height"] + 4)
+        return -0.5 <= gx <= work_width + 0.5 and -0.5 <= gy <= work_height + 0.5
+
+    def _continue_edge_drag(self, x: float, y: float) -> None:
+        gx, gy = self._grid_position(x, y)
+        if not self._in_work_area(gx, gy):
+            return
+        target = (round(gx), round(gy))
+        if self.last_grid_vertex is None:
+            self.last_grid_vertex = target
+            return
+        for start, end in self._grid_path(self.last_grid_vertex, target):
+            if start[1] == end[1]:
+                edge = ("h", min(start[0], end[0]), start[1])
+            else:
+                edge = ("v", start[0], min(start[1], end[1]))
+            self._draw_edge(edge, "wall" if self.editor.tool.get() == "wall" else "door")
+        self.last_grid_vertex = target
+
+    @staticmethod
+    def _grid_path(start: tuple[int, int], end: tuple[int, int]) -> list[
+            tuple[tuple[int, int], tuple[int, int]]]:
+        """Connect grid vertices with an axis-aligned path that follows the pointer."""
+        x, y = start
+        dx, dy = abs(end[0] - x), abs(end[1] - y)
+        step_x = 1 if end[0] >= x else -1
+        step_y = 1 if end[1] >= y else -1
+        error = dx - dy
+        path = []
+        while (x, y) != end:
+            doubled_error = 2 * error
+            if doubled_error > -dy:
+                error -= dy
+                previous = (x, y)
+                x += step_x
+                path.append((previous, (x, y)))
+            if doubled_error < dx:
+                error += dx
+                previous = (x, y)
+                y += step_y
+                path.append((previous, (x, y)))
+        return path
+
+    def _place_nearest_edge(self, x: float, y: float, kind: str) -> None:
+        gx, gy = self._grid_position(x, y)
+        if not self._in_work_area(gx, gy):
+            return
+        candidates = [
+            (abs(gy - round(gy)) * CELL_SIZE,
+             ("h", int(gx), round(gy))),
+            (abs(gx - round(gx)) * CELL_SIZE,
+             ("v", round(gx), int(gy))),
+        ]
+        distance, edge = min(candidates, key=lambda candidate: candidate[0])
+        if distance <= CELL_SIZE * 0.38:
+            self._draw_edge(edge, kind)
+
+    def _draw_edge(self, edge: tuple[str, int, int], kind: str) -> None:
+        floor = self.editor.current_floor
+        if not MapEditor._edge_in_bounds(edge, MAX_MAP_SIZE, MAX_MAP_SIZE):
+            return
+        kind = "wall" if self.editor.tool.get() == "wall" else "door"
+        if floor["edges"].get(edge) != kind:
+            floor["edges"][edge] = kind
+            self.editor.expand_for_edge(edge)
+            self.editor.mark_changed()
+            self.redraw()
+
+    def _place_cell_tool(self, x: float, y: float, callback: Any) -> None:
+        gx, gy = self._grid_position(x, y)
+        if not self._in_work_area(gx, gy):
+            return
+        cell = (int(gx), int(gy))
+        floor = self.editor.current_floor
+        if 0 <= cell[0] < MAX_MAP_SIZE and 0 <= cell[1] < MAX_MAP_SIZE:
+            callback(cell)
+
+    def _apply_erase(self, x: float, y: float) -> None:
+        gx, gy = self._grid_position(x, y)
+        self.editor.erase_near(x, y, gx, gy)
+        self.redraw()
+
+    def redraw(self) -> None:
+        if not self.winfo_exists():
+            return
+        self.delete("all")
+        floor = self.editor.current_floor
+        width = floor["width"]
+        height = floor["height"]
+        work_width = min(MAX_MAP_SIZE, width + 4)
+        work_height = min(MAX_MAP_SIZE, height + 4)
+        left = GRID_ORIGIN
+        top = GRID_ORIGIN
+        right = left + work_width * CELL_SIZE
+        bottom = top + work_height * CELL_SIZE
+        self.configure(scrollregion=(0, 0, right + GRID_ORIGIN, bottom + GRID_ORIGIN))
+
+        for x in range(work_width + 1):
+            px = left + x * CELL_SIZE
+            color = "#d9d5cc" if x <= width else "#eeeae2"
+            self.create_line(px, top, px, bottom, fill=color, width=1)
+        for y in range(work_height + 1):
+            py = top + y * CELL_SIZE
+            color = "#d9d5cc" if y <= height else "#eeeae2"
+            self.create_line(left, py, right, py, fill=color, width=1)
+
+        current_right = left + width * CELL_SIZE
+        current_bottom = top + height * CELL_SIZE
+        self.create_rectangle(left, top, current_right, current_bottom,
+                              outline="#91a2aa", width=2, dash=(4, 3))
+
+        for (axis, x, y), kind in floor["edges"].items():
+            if axis == "h":
+                x1, y1 = left + x * CELL_SIZE, top + y * CELL_SIZE
+                x2, y2 = x1 + CELL_SIZE, y1
+            else:
+                x1, y1 = left + x * CELL_SIZE, top + y * CELL_SIZE
+                x2, y2 = x1, y1 + CELL_SIZE
+            color = "#c05a38" if kind == "door" else "#263238"
+            self.create_line(x1, y1, x2, y2, fill=color, width=7, capstyle=tk.ROUND)
+            if kind == "door":
+                mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+                self.create_oval(mx - 4, my - 4, mx + 4, my + 4, fill="#fff7ed", outline="")
+
+        for stair in self.editor.stairs:
+            for end in stair["ends"]:
+                if end["floorId"] != floor["id"]:
+                    continue
+                cx = left + (end["locate"][0] + 0.5) * CELL_SIZE
+                cy = top + (end["locate"][1] + 0.5) * CELL_SIZE
+                radius = 15
+                self.create_oval(cx - radius, cy - radius, cx + radius, cy + radius,
+                                 fill="#e7a83e", outline="#8a5a13", width=2)
+                stair_number = stair["id"]
+                if stair_number.startswith("stair_"):
+                    stair_number = stair_number.removeprefix("stair_")
+                icon = self.editor.stair_icon(stair, floor["id"])
+                self.create_text(cx, cy - 5, text=icon,
+                                 fill="#30230e", font=("Segoe UI", 8, "bold"))
+                self.create_text(cx, cy + 6, text=f"St:{stair_number}",
+                                 fill="#30230e", font=("Segoe UI", 7, "bold"))
+
+        pending = self.editor.pending_stair
+        if pending and pending["floorId"] == floor["id"]:
+            cx = left + (pending["locate"][0] + 0.5) * CELL_SIZE
+            cy = top + (pending["locate"][1] + 0.5) * CELL_SIZE
+            self.create_oval(cx - 14, cy - 14, cx + 14, cy + 14,
+                             fill="#76c7c4", outline="#176b69", width=2)
+            self.create_text(cx, cy, text="1", fill="#103e3d", font=("Segoe UI", 11, "bold"))
+
+        spawn = self.editor.spawn
+        if spawn and spawn["floorId"] == floor["id"]:
+            cx = left + (spawn["locate"][0] + 0.5) * CELL_SIZE
+            cy = top + (spawn["locate"][1] + 0.5) * CELL_SIZE
+            self.create_oval(cx - 15, cy - 15, cx + 15, cy + 15,
+                             fill="#5b8def", outline="#244b91", width=2)
+            self.create_text(cx, cy, text="P", fill="white", font=("Segoe UI", 11, "bold"))
+
+
+class MapEditor(tk.Tk):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title("maze3d Map Editor")
+        self.geometry("1100x760")
+        self.minsize(800, 560)
+        self.map_path: Path | None = None
+        self.dirty = False
+        self.tool = tk.StringVar(value="wall")
+        self.floor_choice = tk.StringVar()
+        self.status = tk.StringVar(value="壁／ドアは境界線をドラッグして描きます。")
+        self.pending_stair: dict[str, Any] | None = None
+        self.spawn: dict[str, Any] | None = None
+        self.floors: list[dict[str, Any]] = [self._new_floor("1F", 1, 1)]
+        self.stairs: list[dict[str, Any]] = []
+        self._build_menu()
+        self._build_ui()
+        self._refresh_floor_choices()
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.bind("<Control-s>", lambda _event: self.save())
+        self.bind("<Control-o>", lambda _event: self.open_map())
+        self.bind("<Control-Shift-S>", lambda _event: self.save_as())
+        self._update_title()
+
+    @staticmethod
+    def floor_level(floor_id: str) -> int | None:
+        import re
+        match = re.fullmatch(r"B(\d+)F?|(-?\d+)F?|G", floor_id.strip().upper())
+        if match:
+            if floor_id.strip().upper().startswith("B"):
+                return -int(match.group(1))
+            if match.group(2) is not None:
+                return int(match.group(2))
+            if floor_id.strip().upper() == "G":
+                return 0
+        match = re.fullmatch(r"(?:-)?\d+", floor_id.strip())
+        return int(match.group(0)) if match else None
+
+    def stair_icon(self, stair: dict[str, Any], floor_id: str) -> str:
+        levels = [self.floor_level(end["floorId"]) for end in stair["ends"]]
+        if None in levels or levels[0] == levels[1]:
+            return "↕"
+        current_level = self.floor_level(floor_id)
+        if current_level is None:
+            return "↕"
+        return "▲" if current_level == min(levels) else "▼"
+
+    def switch_floor_by_wheel(self, delta: int) -> None:
+        ordered = sorted(self.floors, key=lambda floor: (
+            self.floor_level(floor["id"]) is None,
+            self.floor_level(floor["id"]) if self.floor_level(floor["id"]) is not None else 0,
+            floor["id"]))
+        current_id = self.current_floor["id"]
+        ids = [floor["id"] for floor in ordered]
+        if current_id not in ids:
+            return
+        index = ids.index(current_id)
+        direction = 1 if delta > 0 else -1
+        next_index = index + direction
+        if not 0 <= next_index < len(ids):
+            self.status.set("これ以上階層を移動できません。")
+            return
+        self.floor_choice.set(ids[next_index])
+        self._floor_changed()
+
+    @staticmethod
+    def _new_floor(floor_id: str, width: int, height: int) -> dict[str, Any]:
+        return {"id": floor_id, "width": width, "height": height, "edges": {}}
+
+    @property
+    def current_floor(self) -> dict[str, Any]:
+        return self.floors[self.floor_index]
+
+    @property
+    def floor_index(self) -> int:
+        selected = self.floor_choice.get()
+        for index, floor in enumerate(self.floors):
+            if floor["id"] == selected:
+                return index
+        return 0
+
+    def _build_menu(self) -> None:
+        menu = tk.Menu(self)
+        file_menu = tk.Menu(menu, tearoff=False)
+        file_menu.add_command(label="新規", command=self.new_map, accelerator="Ctrl+N")
+        file_menu.add_command(label="開く...", command=self.open_map, accelerator="Ctrl+O")
+        file_menu.add_separator()
+        file_menu.add_command(label="保存", command=self.save, accelerator="Ctrl+S")
+        file_menu.add_command(label="名前を付けて保存...", command=self.save_as, accelerator="Ctrl+Shift+S")
+        file_menu.add_separator()
+        file_menu.add_command(label="終了", command=self._close)
+        menu.add_cascade(label="ファイル", menu=file_menu)
+        self.config(menu=menu)
+        self.bind("<Control-n>", lambda _event: self.new_map())
+
+    def _build_ui(self) -> None:
+        outer = ttk.Frame(self, padding=10)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        sidebar = ttk.Frame(outer, width=235)
+        sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        sidebar.pack_propagate(False)
+        ttk.Label(sidebar, text="フロア", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W)
+        self.floor_combo = ttk.Combobox(sidebar, textvariable=self.floor_choice, state="readonly")
+        self.floor_combo.pack(fill=tk.X, pady=(6, 5))
+        self.floor_combo.bind("<<ComboboxSelected>>", self._floor_changed)
+        floor_buttons = ttk.Frame(sidebar)
+        floor_buttons.pack(fill=tk.X)
+        ttk.Button(floor_buttons, text="追加", command=self.add_floor).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(floor_buttons, text="削除", command=self.delete_floor).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        ttk.Button(sidebar, text="サイズ変更...", command=self.resize_floor).pack(fill=tk.X, pady=(5, 2))
+        ttk.Label(sidebar, text="配置に合わせて範囲が自動拡張されます。", wraplength=220,
+              foreground="#687078").pack(anchor=tk.W, pady=(0, 8))
+
+        ttk.Separator(sidebar).pack(fill=tk.X, pady=5)
+        ttk.Label(sidebar, text="編集ツール", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W, pady=(5, 3))
+        tools = [
+            ("wall", "壁（ドラッグ方向）"),
+            ("door", "ドア（ドラッグ方向）"),
+            ("erase", "消去"),
+            ("stair", "階段（両端を指定）"),
+            ("spawn", "ゲーム開始地点"),
+        ]
+        for value, text in tools:
+            ttk.Radiobutton(sidebar, text=text, value=value, variable=self.tool,
+                            command=self._tool_changed).pack(anchor=tk.W, pady=2)
+
+        ttk.Separator(sidebar).pack(fill=tk.X, pady=10)
+        ttk.Label(sidebar, text="凡例", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
+        ttk.Label(sidebar, text="■ 壁  ■ ドア  ● 階段  ● P 開始", foreground="#495057").pack(anchor=tk.W, pady=4)
+        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\n\n点線の外側も描画できます。",
+                  justify=tk.LEFT, wraplength=220).pack(anchor=tk.W, pady=(6, 0))
+
+        area = ttk.Frame(outer)
+        area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        heading = ttk.Frame(area)
+        heading.pack(fill=tk.X, pady=(0, 7))
+        self.map_label = ttk.Label(heading, text="", font=("Segoe UI", 11, "bold"))
+        self.map_label.pack(side=tk.LEFT)
+        ttk.Label(heading, text="左クリック／ドラッグで編集", foreground="#687078").pack(side=tk.RIGHT)
+
+        canvas_frame = ttk.Frame(area)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        self.canvas = MapCanvas(canvas_frame, self)
+        horizontal = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        vertical = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.canvas.configure(xscrollcommand=horizontal.set, yscrollcommand=vertical.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(self, textvariable=self.status, anchor=tk.W, padding=(10, 5), relief=tk.SUNKEN).pack(fill=tk.X)
+        self._update_map_label()
+
+    def _refresh_floor_choices(self) -> None:
+        previous = self.floor_choice.get()
+        values = [floor["id"] for floor in sorted(self.floors, key=lambda floor: (
+            self.floor_level(floor["id"]) is None,
+            self.floor_level(floor["id"]) if self.floor_level(floor["id"]) is not None else 0,
+            floor["id"]))]
+        self.floor_combo.configure(values=values)
+        if previous in values:
+            self.floor_choice.set(previous)
+        else:
+            self.floor_choice.set(values[0])
+        self._update_map_label()
+        self.canvas.redraw()
+
+    def _update_map_label(self) -> None:
+        if hasattr(self, "map_label"):
+            floor = self.current_floor
+            self.map_label.configure(text=f"{floor['id']}  —  {floor['width']} × {floor['height']} (自動拡張)")
+
+    def _floor_changed(self, _event: tk.Event | None = None) -> None:
+        self._update_map_label()
+        self.canvas.redraw()
+        self.status.set(f"{self.current_floor['id']} を編集中です。")
+
+    def _tool_changed(self) -> None:
+        if self.tool.get() != "stair" and self.pending_stair:
+            self.pending_stair = None
+            self.canvas.redraw()
+        labels = {"wall": "壁", "door": "ドア", "erase": "消去",
+                  "stair": "階段", "spawn": "ゲーム開始地点"}
+        self.status.set(f"{labels[self.tool.get()]}ツールを選択しました。")
+
+    def mark_changed(self) -> None:
+        self.dirty = True
+        self._update_title()
+
+    def _update_title(self) -> None:
+        name = self.map_path.name if self.map_path else "新規マップ"
+        self.title(f"{'*' if self.dirty else ''}{name} — maze3d Map Editor")
+
+    def place_stair(self, cell: tuple[int, int]) -> None:
+        old_size = (self.current_floor["width"], self.current_floor["height"])
+        self.expand_for_cell(cell)
+        if self.pending_stair is None and old_size != (
+            self.current_floor["width"], self.current_floor["height"]):
+            self.mark_changed()
+        endpoint = {"floorId": self.current_floor["id"], "locate": [cell[0], cell[1]]}
+        if self.pending_stair is None:
+            self.pending_stair = endpoint
+            self.status.set(f"階段の1端目: {endpoint['floorId']} {cell}。フロアを選び、2端目をクリックしてください。")
+        else:
+            if (endpoint["floorId"] == self.pending_stair["floorId"]
+                    and endpoint["locate"] == self.pending_stair["locate"]):
+                self.status.set("同じセルは両端に指定できません。別のセルをクリックしてください。")
+                return
+            stair_id = self._next_stair_id()
+            self.stairs.append({"id": stair_id, "ends": [self.pending_stair, endpoint]})
+            self.pending_stair = None
+            self.mark_changed()
+            self.status.set(f"階段 {stair_id} を双方向で接続しました。")
+        self.canvas.redraw()
+
+    def place_spawn(self, cell: tuple[int, int]) -> None:
+        self.expand_for_cell(cell)
+        self.spawn = {"floorId": self.current_floor["id"], "locate": [cell[0], cell[1]]}
+        self.mark_changed()
+        self.status.set(f"ゲーム開始地点を {self.current_floor['id']} の {cell} に設定しました。")
+        self.canvas.redraw()
+
+    def expand_for_edge(self, edge: tuple[str, int, int]) -> None:
+        axis, x, y = edge
+        floor = self.current_floor
+        new_width = max(floor["width"], x + 1 if axis == "h" else x)
+        new_height = max(floor["height"], y if axis == "h" else y + 1)
+        if new_width > MAX_MAP_SIZE or new_height > MAX_MAP_SIZE:
+            return
+        if (new_width, new_height) != (floor["width"], floor["height"]):
+            floor["width"], floor["height"] = new_width, new_height
+            self._update_map_label()
+
+    def expand_for_cell(self, cell: tuple[int, int]) -> None:
+        floor = self.current_floor
+        new_width = max(floor["width"], cell[0] + 1)
+        new_height = max(floor["height"], cell[1] + 1)
+        if new_width > MAX_MAP_SIZE or new_height > MAX_MAP_SIZE:
+            return
+        if (new_width, new_height) != (floor["width"], floor["height"]):
+            floor["width"], floor["height"] = new_width, new_height
+            self._update_map_label()
+
+    def _next_stair_id(self) -> str:
+        used = {stair["id"] for stair in self.stairs}
+        number = 1
+        while f"stair_{number}" in used:
+            number += 1
+        return f"stair_{number}"
+
+    def erase_near(self, px: float, py: float, gx: float, gy: float) -> None:
+        floor = self.current_floor
+        nearest: tuple[float, tuple[str, int, int]] | None = None
+        for edge in floor["edges"]:
+            axis, ex, ey = edge
+            if axis == "h":
+                x1, y1 = GRID_ORIGIN + ex * CELL_SIZE, GRID_ORIGIN + ey * CELL_SIZE
+                x2, y2 = x1 + CELL_SIZE, y1
+                distance = abs(py - y1) if x1 - 8 <= px <= x2 + 8 else min(
+                    ((px - x1) ** 2 + (py - y1) ** 2) ** 0.5,
+                    ((px - x2) ** 2 + (py - y2) ** 2) ** 0.5)
+            else:
+                x1, y1 = GRID_ORIGIN + ex * CELL_SIZE, GRID_ORIGIN + ey * CELL_SIZE
+                x2, y2 = x1, y1 + CELL_SIZE
+                distance = abs(px - x1) if y1 - 8 <= py <= y2 + 8 else min(
+                    ((px - x1) ** 2 + (py - y1) ** 2) ** 0.5,
+                    ((px - x2) ** 2 + (py - y2) ** 2) ** 0.5)
+            if nearest is None or distance < nearest[0]:
+                nearest = (distance, edge)
+
+        if nearest and nearest[0] <= 13:
+            del floor["edges"][nearest[1]]
+            self.mark_changed()
+            return
+
+        cell_x, cell_y = int(gx), int(gy)
+        if (self.spawn and self.spawn["floorId"] == floor["id"]
+                and self.spawn["locate"] == [cell_x, cell_y]):
+            self.spawn = None
+            self.mark_changed()
+            self.status.set("ゲーム開始地点を解除しました。")
+            return
+        for index in range(len(self.stairs) - 1, -1, -1):
+            stair = self.stairs[index]
+            if any(end["floorId"] == floor["id"] and end["locate"] == [cell_x, cell_y]
+                   for end in stair["ends"]):
+                del self.stairs[index]
+                self.mark_changed()
+                self.status.set(f"階段 {stair['id']} を削除しました（接続も削除）。")
+                return
+
+    def add_floor(self) -> None:
+        floor_id = simpledialog.askstring("フロア追加", "フロア名（例: 2F, B1F）:", parent=self)
+        if floor_id is None:
+            return
+        floor_id = floor_id.strip()
+        if not floor_id:
+            messagebox.showerror("入力エラー", "フロア名を入力してください。", parent=self)
+            return
+        if any(floor["id"] == floor_id for floor in self.floors):
+            messagebox.showerror("入力エラー", "そのフロア名は既に使われています。", parent=self)
+            return
+        self.floors.append(self._new_floor(floor_id, 1, 1))
+        self.floor_choice.set(floor_id)
+        self._refresh_floor_choices()
+        self.mark_changed()
+        self.status.set(f"フロア {floor_id} を追加しました。")
+
+    def delete_floor(self) -> None:
+        if len(self.floors) <= 1:
+            messagebox.showwarning("削除できません", "マップには最低1フロア必要です。", parent=self)
+            return
+        floor = self.current_floor
+        linked = [stair for stair in self.stairs
+                  if any(end["floorId"] == floor["id"] for end in stair["ends"])]
+        prompt = f"フロア {floor['id']} を削除しますか？"
+        if linked:
+            prompt += f"\nこのフロアに接続する階段 {len(linked)} 件も削除されます。"
+        if not messagebox.askyesno("フロア削除", prompt, parent=self):
+            return
+        self.floors.remove(floor)
+        self.stairs = [stair for stair in self.stairs
+                       if not any(end["floorId"] == floor["id"] for end in stair["ends"])]
+        if self.spawn and self.spawn["floorId"] == floor["id"]:
+            self.spawn = None
+        self.pending_stair = None
+        self.floor_choice.set(self.floors[0]["id"])
+        self._refresh_floor_choices()
+        self.mark_changed()
+        self.status.set(f"フロア {floor['id']} を削除しました。")
+
+    def resize_floor(self) -> None:
+        floor = self.current_floor
+        width = simpledialog.askinteger("サイズ変更", "幅（セル数）:", initialvalue=floor["width"],
+                                        minvalue=MIN_MAP_SIZE, maxvalue=MAX_MAP_SIZE, parent=self)
+        if width is None:
+            return
+        height = simpledialog.askinteger("サイズ変更", "高さ（セル数）:", initialvalue=floor["height"],
+                                         minvalue=MIN_MAP_SIZE, maxvalue=MAX_MAP_SIZE, parent=self)
+        if height is None:
+            return
+        out_edges = [edge for edge in floor["edges"] if not self._edge_in_bounds(edge, width, height)]
+        out_stairs = [stair for stair in self.stairs
+                      if any(end["floorId"] == floor["id"] and
+                             (end["locate"][0] >= width or end["locate"][1] >= height)
+                             for end in stair["ends"])]
+        out_spawn = bool(self.spawn and self.spawn["floorId"] == floor["id"]
+                 and (self.spawn["locate"][0] >= width or self.spawn["locate"][1] >= height))
+        if (out_edges or out_stairs or out_spawn) and not messagebox.askyesno(
+            "範囲外データ", f"範囲外になる線分 {len(out_edges)} 本、階段 {len(out_stairs)} 件、開始地点 {'1件' if out_spawn else '0件'}を削除して変更しますか？",
+                parent=self):
+            return
+        for edge in out_edges:
+            del floor["edges"][edge]
+        if out_stairs:
+            removed = {stair["id"] for stair in out_stairs}
+            self.stairs = [stair for stair in self.stairs if stair["id"] not in removed]
+        if out_spawn:
+            self.spawn = None
+        floor["width"], floor["height"] = width, height
+        self._update_map_label()
+        self.canvas.redraw()
+        self.mark_changed()
+        self.status.set(f"{floor['id']} のサイズを {width} × {height} に変更しました。")
+
+    @staticmethod
+    def _edge_in_bounds(edge: tuple[str, int, int], width: int, height: int) -> bool:
+        axis, x, y = edge
+        if axis == "h":
+            return 0 <= x < width and 0 <= y <= height
+        return 0 <= x <= width and 0 <= y < height
+
+    def new_map(self) -> None:
+        if not self._confirm_discard():
+            return
+        self.floors = [self._new_floor("1F", 1, 1)]
+        self.stairs = []
+        self.spawn = None
+        self.pending_stair = None
+        self.map_path = None
+        self.dirty = False
+        self.floor_choice.set("1F")
+        self._refresh_floor_choices()
+        self.status.set("新しいマップを作成しました。")
+        self._update_title()
+
+    def _confirm_discard(self) -> bool:
+        if not self.dirty:
+            return True
+        answer = messagebox.askyesnocancel("未保存の変更", "変更を保存しますか？", parent=self)
+        if answer is None:
+            return False
+        if answer:
+            return self.save()
+        return True
+
+    def open_map(self) -> None:
+        if not self._confirm_discard():
+            return
+        filename = filedialog.askopenfilename(
+            parent=self, title="マップを開く", filetypes=[("JSON マップ", "*.json"), ("すべてのファイル", "*.*")])
+        if not filename:
+            return
+        try:
+            floors, stairs, spawn, overlaps = self._load_document(Path(filename))
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as error:
+            messagebox.showerror("読み込みエラー", str(error), parent=self)
+            return
+        self.floors, self.stairs, self.spawn = floors, stairs, spawn
+        self.pending_stair = None
+        self.map_path = Path(filename)
+        self.dirty = False
+        self.floor_choice.set(floors[0]["id"])
+        self._refresh_floor_choices()
+        if overlaps:
+            details = "\n".join(overlaps[:8])
+            if len(overlaps) > 8:
+                details += f"\nほか {len(overlaps) - 8} 件"
+            self.status.set(f"警告: 重複した線分 {len(overlaps)} 件。後方の定義を優先しました。")
+            messagebox.showwarning("重複する壁・ドア", f"重複した線分が {len(overlaps)} 件あります。後方定義を優先しました。\n\n{details}", parent=self)
+        else:
+            self.status.set(f"{Path(filename).name} を読み込みました。")
+        self._update_title()
+
+    def _load_document(self, path: Path) -> tuple[
+            list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None, list[str]]:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or document.get("version") != SCHEMA_VERSION:
+            raise ValueError(f"対応するJSON形式ではありません（version: {SCHEMA_VERSION} が必要です）。")
+        raw_floors = document.get("floors")
+        if not isinstance(raw_floors, list) or not raw_floors:
+            raise ValueError("floors は1件以上の配列で指定してください。")
+
+        floors: list[dict[str, Any]] = []
+        floor_ids: set[str] = set()
+        overlaps: list[str] = []
+        for floor_number, raw_floor in enumerate(raw_floors, start=1):
+            if not isinstance(raw_floor, dict):
+                raise ValueError(f"floors[{floor_number - 1}] はオブジェクトではありません。")
+            floor_id = raw_floor.get("id")
+            if not isinstance(floor_id, str) or not floor_id.strip() or floor_id in floor_ids:
+                raise ValueError(f"floors[{floor_number - 1}].id が空、または重複しています。")
+            floor_ids.add(floor_id)
+            width = validate_size(raw_floor.get("width"), f"{floor_id}.width")
+            height = validate_size(raw_floor.get("height"), f"{floor_id}.height")
+            floor = self._new_floor(floor_id, width, height)
+            raw_edges = raw_floor.get("edges", [])
+            if not isinstance(raw_edges, list):
+                raise ValueError(f"{floor_id}.edges は配列で指定してください。")
+            for edge_number, raw_edge in enumerate(raw_edges, start=1):
+                if not isinstance(raw_edge, dict):
+                    raise ValueError(f"{floor_id}.edges[{edge_number - 1}] はオブジェクトではありません。")
+                axis = raw_edge.get("axis")
+                kind = raw_edge.get("type")
+                if axis not in ("h", "v") or kind not in EDGE_TYPES:
+                    raise ValueError(f"{floor_id}.edges[{edge_number - 1}] の axis/type が不正です。")
+                x, y = parse_coordinate(raw_edge.get("locate"), f"{floor_id}.edges[{edge_number - 1}]")
+                length = raw_edge.get("length", 1)
+                if isinstance(length, bool) or not isinstance(length, int) or length < 1:
+                    raise ValueError(f"{floor_id}.edges[{edge_number - 1}].length は1以上の整数です。")
+                for offset in range(length):
+                    edge = (axis, x + offset, y) if axis == "h" else (axis, x, y + offset)
+                    if not self._edge_in_bounds(edge, width, height):
+                        raise ValueError(f"{floor_id}.edges[{edge_number - 1}] がフロア範囲外です。")
+                    if edge in floor["edges"]:
+                        previous = floor["edges"][edge]
+                        overlaps.append(f"{floor_id} {axis} {edge[1:]}: {previous} → {kind}（定義 {edge_number}）")
+                    floor["edges"][edge] = kind
+            floors.append(floor)
+
+        raw_stairs = document.get("stairs", [])
+        if not isinstance(raw_stairs, list):
+            raise ValueError("stairs は配列で指定してください。")
+        stairs: list[dict[str, Any]] = []
+        stair_ids: set[str] = set()
+        floor_by_id = {floor["id"]: floor for floor in floors}
+        for index, raw_stair in enumerate(raw_stairs):
+            if not isinstance(raw_stair, dict):
+                raise ValueError(f"stairs[{index}] はオブジェクトではありません。")
+            stair_id = raw_stair.get("id")
+            ends = raw_stair.get("ends")
+            if not isinstance(stair_id, str) or not stair_id or stair_id in stair_ids:
+                raise ValueError(f"stairs[{index}].id が空、または重複しています。")
+            if not isinstance(ends, list) or len(ends) != 2:
+                raise ValueError(f"階段 {stair_id} は ends に2地点を指定してください。")
+            parsed_ends = []
+            for end_index, end in enumerate(ends):
+                if not isinstance(end, dict) or end.get("floorId") not in floor_by_id:
+                    raise ValueError(f"階段 {stair_id} の端点 {end_index + 1} の floorId が不正です。")
+                floor_id = end["floorId"]
+                x, y = parse_coordinate(end.get("locate"), f"階段 {stair_id} の端点 {end_index + 1}")
+                floor = floor_by_id[floor_id]
+                if not 0 <= x < floor["width"] or not 0 <= y < floor["height"]:
+                    raise ValueError(f"階段 {stair_id} の端点 {end_index + 1} がセル範囲外です。")
+                parsed_ends.append({"floorId": floor_id, "locate": [x, y]})
+            if parsed_ends[0] == parsed_ends[1]:
+                raise ValueError(f"階段 {stair_id} の両端が同じセルです。")
+            stair_ids.add(stair_id)
+            stairs.append({"id": stair_id, "ends": parsed_ends})
+        raw_spawn = document.get("spawn")
+        spawn = None
+        if raw_spawn is not None:
+            if not isinstance(raw_spawn, dict) or raw_spawn.get("floorId") not in floor_by_id:
+                raise ValueError("spawn.floorId が不正です。")
+            spawn_floor_id = raw_spawn["floorId"]
+            spawn_x, spawn_y = parse_coordinate(raw_spawn.get("locate"), "spawn")
+            spawn_floor = floor_by_id[spawn_floor_id]
+            if not 0 <= spawn_x < spawn_floor["width"] or not 0 <= spawn_y < spawn_floor["height"]:
+                raise ValueError("spawn.locate がセル範囲外です。")
+            spawn = {"floorId": spawn_floor_id, "locate": [spawn_x, spawn_y]}
+        return floors, stairs, spawn, overlaps
+
+    def save(self) -> bool:
+        if self.map_path is None:
+            return self.save_as()
+        try:
+            self.map_path.write_text(json.dumps(self._document(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError as error:
+            messagebox.showerror("保存エラー", str(error), parent=self)
+            return False
+        self.dirty = False
+        self._update_title()
+        self.status.set(f"{self.map_path.name} を保存しました。")
+        return True
+
+    def save_as(self) -> bool:
+        filename = filedialog.asksaveasfilename(
+            parent=self, title="マップを保存", defaultextension=".json",
+            filetypes=[("JSON マップ", "*.json"), ("すべてのファイル", "*.*")])
+        if not filename:
+            return False
+        self.map_path = Path(filename)
+        return self.save()
+
+    def _document(self) -> dict[str, Any]:
+        floors = []
+        for floor in self.floors:
+            floors.append({
+                "id": floor["id"],
+                "width": floor["width"],
+                "height": floor["height"],
+                "edges": self._compress_edges(floor["edges"]),
+            })
+        document = {
+            "version": SCHEMA_VERSION,
+            "floors": floors,
+            "stairs": self.stairs,
+        }
+        if self.spawn:
+            document["spawn"] = self.spawn
+        return document
+
+    @staticmethod
+    def _compress_edges(edges: dict[tuple[str, int, int], str]) -> list[dict[str, Any]]:
+        groups: dict[tuple[str, int, str], list[int]] = {}
+        for (axis, x, y), kind in edges.items():
+            fixed, start = (y, x) if axis == "h" else (x, y)
+            groups.setdefault((axis, fixed, kind), []).append(start)
+        output = []
+        for axis, fixed, kind in sorted(groups):
+            positions = sorted(set(groups[(axis, fixed, kind)]))
+            run_start = previous = positions[0]
+            for position in positions[1:] + [None]:
+                if position is not None and position == previous + 1:
+                    previous = position
+                    continue
+                start_x, start_y = (run_start, fixed) if axis == "h" else (fixed, run_start)
+                output.append({"axis": axis, "locate": [start_x, start_y], "type": kind,
+                               "length": previous - run_start + 1})
+                if position is not None:
+                    run_start = previous = position
+        return output
+
+    def _close(self) -> None:
+        if self._confirm_discard():
+            self.destroy()
+
+
+def main() -> None:
+    app = MapEditor()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

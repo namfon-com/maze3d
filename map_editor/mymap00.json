@@ -1,0 +1,471 @@
+{
+  "version": 1,
+  "floors": [
+    {
+      "id": "1F",
+      "width": 13,
+      "height": 6,
+      "edges": [
+        {
+          "axis": "h",
+          "locate": [
+            0,
+            0
+          ],
+          "type": "wall",
+          "length": 6
+        },
+        {
+          "axis": "h",
+          "locate": [
+            7,
+            0
+          ],
+          "type": "wall",
+          "length": 6
+        },
+        {
+          "axis": "h",
+          "locate": [
+            2,
+            1
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            1,
+            1
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            3,
+            1
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            2,
+            2
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            6,
+            2
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            9,
+            2
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "h",
+          "locate": [
+            6,
+            3
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            0,
+            4
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            2,
+            4
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            9,
+            4
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            3,
+            5
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            1,
+            5
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            5
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            0,
+            6
+          ],
+          "type": "wall",
+          "length": 6
+        },
+        {
+          "axis": "h",
+          "locate": [
+            7,
+            6
+          ],
+          "type": "wall",
+          "length": 6
+        },
+        {
+          "axis": "v",
+          "locate": [
+            0,
+            0
+          ],
+          "type": "wall",
+          "length": 6
+        },
+        {
+          "axis": "v",
+          "locate": [
+            1,
+            3
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            1,
+            1
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            1,
+            4
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            2,
+            2
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            0
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            4,
+            3
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            5,
+            1
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            6,
+            0
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            6,
+            3
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "v",
+          "locate": [
+            7,
+            0
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            7,
+            3
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "v",
+          "locate": [
+            9,
+            2
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            11,
+            2
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            11,
+            3
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            13,
+            0
+          ],
+          "type": "wall",
+          "length": 6
+        }
+      ]
+    },
+    {
+      "id": "B1F",
+      "width": 8,
+      "height": 3,
+      "edges": [
+        {
+          "axis": "h",
+          "locate": [
+            0,
+            0
+          ],
+          "type": "wall",
+          "length": 8
+        },
+        {
+          "axis": "h",
+          "locate": [
+            3,
+            1
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            7,
+            1
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            0,
+            1
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            1
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            2
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            3,
+            3
+          ],
+          "type": "wall",
+          "length": 5
+        },
+        {
+          "axis": "v",
+          "locate": [
+            0,
+            0
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            1
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            4,
+            1
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            7,
+            0
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            8,
+            0
+          ],
+          "type": "wall",
+          "length": 3
+        }
+      ]
+    }
+  ],
+  "stairs": [
+    {
+      "id": "stair_2",
+      "ends": [
+        {
+          "floorId": "B1F",
+          "locate": [
+            6,
+            0
+          ]
+        },
+        {
+          "floorId": "1F",
+          "locate": [
+            5,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stair_1",
+      "ends": [
+        {
+          "floorId": "1F",
+          "locate": [
+            0,
+            4
+          ]
+        },
+        {
+          "floorId": "B1F",
+          "locate": [
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ],
+  "spawn": {
+    "floorId": "1F",
+    "locate": [
+      0,
+      0
+    ]
+  }
+}

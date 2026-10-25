@@ -66,3 +66,22 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# --- maze3d project ---
+# CMake / Visual Studio generated files
+/build/
+cmake-build-*/
+
+# Python virtual environments and caches
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+
+# Packaged editor output
+**/dist/
+**/release/
+
+# Local editor settings
+.vscode/
+.idea/
