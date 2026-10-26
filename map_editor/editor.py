@@ -13,6 +13,8 @@ GRID_ORIGIN = 40
 MIN_MAP_SIZE = 1
 MAX_MAP_SIZE = 200
 EDGE_TYPES = {"wall", "door"}
+DOOR_COLOR = "#f2c230"
+DOOR_OUTLINE = "#8a6400"
 # 開始時の向き（時計回り順）。y はマップ下方向が正
 FACINGS = ["N", "E", "S", "W"]
 FACING_VECTORS = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}
@@ -216,11 +218,18 @@ class MapCanvas(tk.Canvas):
             else:
                 x1, y1 = left + x * CELL_SIZE, top + y * CELL_SIZE
                 x2, y2 = x1, y1 + CELL_SIZE
-            color = "#c05a38" if kind == "door" else "#263238"
-            self.create_line(x1, y1, x2, y2, fill=color, width=7, capstyle=tk.ROUND)
             if kind == "door":
+                # ドア: 細い線 + 中央の太いバー（扉板）
+                self.create_line(x1, y1, x2, y2, fill=DOOR_OUTLINE, width=3)
                 mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-                self.create_oval(mx - 4, my - 4, mx + 4, my + 4, fill="#fff7ed", outline="")
+                half_length, half_thickness = CELL_SIZE * 0.28, 5
+                if axis == "h":
+                    bar = (mx - half_length, my - half_thickness, mx + half_length, my + half_thickness)
+                else:
+                    bar = (mx - half_thickness, my - half_length, mx + half_thickness, my + half_length)
+                self.create_rectangle(*bar, fill=DOOR_COLOR, outline=DOOR_OUTLINE, width=2)
+            else:
+                self.create_line(x1, y1, x2, y2, fill="#263238", width=5, capstyle=tk.ROUND)
 
         for stair in self.editor.stairs:
             for end in stair["ends"]:

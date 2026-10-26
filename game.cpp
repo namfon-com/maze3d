@@ -395,24 +395,27 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderFillRect(renderer, &background);
 
-    auto setEdgeColor = [renderer](const std::string& type) {
-        if (type == "door") SDL_SetRenderDrawColor(renderer, 230, 190, 70, 255);
+    // 壁: 細線。ドア: 黄色の細線 + 中央に太いバー（扉板）
+    const int doorLength = std::max(4, cellSize * 56 / 100);
+    const int doorThickness = std::max(4, cellSize / 6);
+    auto drawEdge = [&](std::uint64_t key, const std::string& type, bool horizontal) {
+        int x = static_cast<int>(key >> 32);
+        int y = static_cast<int>(key & 0xffffffffu);
+        int px = originX + x * cellSize;
+        int py = originY + y * cellSize;
+        if (type == "door") SDL_SetRenderDrawColor(renderer, 242, 194, 48, 255);
         else SDL_SetRenderDrawColor(renderer, 220, 218, 210, 255);
+        SDL_Rect line = horizontal ? SDL_Rect{px, py - 1, cellSize + 1, 2}
+                                   : SDL_Rect{px - 1, py, 2, cellSize + 1};
+        SDL_RenderFillRect(renderer, &line);
+        if (type != "door") return;
+        SDL_Rect bar = horizontal
+            ? SDL_Rect{px + (cellSize - doorLength) / 2, py - doorThickness / 2, doorLength, doorThickness}
+            : SDL_Rect{px - doorThickness / 2, py + (cellSize - doorLength) / 2, doorThickness, doorLength};
+        SDL_RenderFillRect(renderer, &bar);
     };
-    for (const auto& edge : floor.hEdges) {
-        int x = static_cast<int>(edge.first >> 32);
-        int y = static_cast<int>(edge.first & 0xffffffffu);
-        setEdgeColor(edge.second);
-        SDL_Rect line{originX + x * cellSize, originY + y * cellSize - 1, cellSize + 1, 2};
-        SDL_RenderFillRect(renderer, &line);
-    }
-    for (const auto& edge : floor.vEdges) {
-        int x = static_cast<int>(edge.first >> 32);
-        int y = static_cast<int>(edge.first & 0xffffffffu);
-        setEdgeColor(edge.second);
-        SDL_Rect line{originX + x * cellSize - 1, originY + y * cellSize, 2, cellSize + 1};
-        SDL_RenderFillRect(renderer, &line);
-    }
+    for (const auto& edge : floor.hEdges) drawEdge(edge.first, edge.second, true);
+    for (const auto& edge : floor.vEdges) drawEdge(edge.first, edge.second, false);
 
     for (const Stair& stair : map.stairs) {
         for (const StairEnd& end : stair.ends) {
