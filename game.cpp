@@ -1,10 +1,12 @@
 #include <SDL.h>
 #include <SDL_image.h>
+#include <SDL_ttf.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -18,12 +20,21 @@ namespace fs = std::filesystem;
 
 struct StairEnd { std::string floorId; int x = 0; int y = 0; };
 struct Stair { std::string id; StairEnd ends[2]; };
+// セルに置くイベント。type: "message"（メッセージ表示）/ "treasure"（宝箱: 1回だけ gold / item を入手）
+struct MapEvent {
+    std::string type;
+    std::string text;
+    bool once = false;
+    int gold = 0;
+    std::string item;
+};
 struct Floor {
     std::string id;
     int width = 0;
     int height = 0;
     std::unordered_map<std::uint64_t, std::string> hEdges;
     std::unordered_map<std::uint64_t, std::string> vEdges;
+    std::unordered_map<std::uint64_t, MapEvent> events;  // key = edgeKey(セルx, セルy)
 };
 struct MapData {
     int version = 1;
@@ -66,6 +77,19 @@ MapData loadMap(const fs::path& path) {
                 if (axis == "h") floor.hEdges[edgeKey(x + offset, y)] = type;
                 else floor.vEdges[edgeKey(x, y + offset)] = type;
             }
+        }
+        for (const auto& evj : fj.value("events", json::array())) {
+            MapEvent event;
+            event.type = evj.at("type").get<std::string>();
+            if (event.type != "message" && event.type != "treasure")
+                throw std::runtime_error("Unknown event type: " + event.type);
+            event.text = evj.value("text", "");
+            event.once = evj.value("once", false);
+            event.gold = evj.value("gold", 0);
+            event.item = evj.value("item", "");
+            int x = evj.at("locate").at(0).get<int>();
+            int y = evj.at("locate").at(1).get<int>();
+            floor.events[edgeKey(x, y)] = event;
         }
         map.floors.push_back(std::move(floor));
     }
@@ -373,7 +397,12 @@ void drawPseudo3D(SDL_Renderer* renderer, const Floor& floor,
     }
 }
 
+std::string eventId(const std::string& floorId, int x, int y) {
+    return floorId + ":" + std::to_string(x) + "," + std::to_string(y);
+}
+
 void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& map,
+                   const std::unordered_set<std::string>& doneEvents,
                    double playerX, double playerY, double angle) {
     const int windowWidth = 420;
     const int windowHeight = 450;
@@ -416,6 +445,23 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
     };
     for (const auto& edge : floor.hEdges) drawEdge(edge.first, edge.second, true);
     for (const auto& edge : floor.vEdges) drawEdge(edge.first, edge.second, false);
+
+    for (const auto& [key, event] : floor.events) {
+        int x = static_cast<int>(key >> 32);
+        int y = static_cast<int>(key & 0xffffffffu);
+        int size = std::max(4, cellSize / 3);
+        SDL_Rect marker{originX + x * cellSize + (cellSize - size) / 2,
+                        originY + y * cellSize + (cellSize - size) / 2, size, size};
+        bool done = doneEvents.count(eventId(floor.id, x, y)) > 0;
+        if (event.type == "treasure") {
+            if (done) SDL_SetRenderDrawColor(renderer, 90, 70, 50, 255);
+            else SDL_SetRenderDrawColor(renderer, 201, 139, 60, 255);
+        } else {
+            if (done) SDL_SetRenderDrawColor(renderer, 60, 80, 110, 255);
+            else SDL_SetRenderDrawColor(renderer, 120, 180, 255, 255);
+        }
+        SDL_RenderFillRect(renderer, &marker);
+    }
 
     for (const Stair& stair : map.stairs) {
         for (const StairEnd& end : stair.ends) {
@@ -491,6 +537,77 @@ fs::path findMapPath(int argc, char* argv[], const fs::path& exeDir) {
     return candidates[0];
 }
 
+// 画面下部のメッセージウィンドウ。キューの先頭を表示し、決定キーで次へ進む
+constexpr int kFontPixel = 12;  // PixelMplus12 の設計サイズ。整数倍で拡大してドットをくっきり保つ
+constexpr int kTextScale = 2;
+
+struct MessageWindow {
+    std::deque<std::string> queue;
+    SDL_Texture* texture = nullptr;  // queue.front() の描画キャッシュ
+    int textWidth = 0;
+    int textHeight = 0;
+
+    bool open() const { return !queue.empty(); }
+    void push(const std::string& text) { queue.push_back(text); }
+    void advance() {
+        if (queue.empty()) return;
+        queue.pop_front();
+        release();
+    }
+    void release() {
+        if (texture) SDL_DestroyTexture(texture);
+        texture = nullptr;
+    }
+};
+
+SDL_Texture* renderText(SDL_Renderer* renderer, TTF_Font* font, const std::string& text,
+                        int wrapWidth, int& width, int& height) {
+    SDL_Color white{235, 235, 225, 255};
+    SDL_Surface* surface = TTF_RenderUTF8_Solid_Wrapped(font, text.empty() ? " " : text.c_str(), white, wrapWidth);
+    if (!surface) return nullptr;
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    width = surface->w;
+    height = surface->h;
+    SDL_FreeSurface(surface);
+    return texture;
+}
+
+void drawMessageWindow(SDL_Renderer* renderer, TTF_Font* font, MessageWindow& window, Uint32 ticks) {
+    if (!window.open()) return;
+    const SDL_Rect frame{24, kViewHeight - 24 - 160, kViewWidth - 48, 160};
+    const int padding = 22;
+    if (!window.texture) {
+        int wrap = (frame.w - padding * 2) / kTextScale;
+        window.texture = renderText(renderer, font, window.queue.front(), wrap, window.textWidth, window.textHeight);
+    }
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 225);
+    SDL_RenderFillRect(renderer, &frame);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    // 二重枠（外: 太い白線、内: 細線）
+    SDL_SetRenderDrawColor(renderer, 235, 235, 225, 255);
+    for (int i = 0; i < 3; ++i) {
+        SDL_Rect border{frame.x + i, frame.y + i, frame.w - i * 2, frame.h - i * 2};
+        SDL_RenderDrawRect(renderer, &border);
+    }
+    SDL_Rect inner{frame.x + 7, frame.y + 7, frame.w - 14, frame.h - 14};
+    SDL_RenderDrawRect(renderer, &inner);
+
+    if (window.texture) {
+        SDL_Rect destination{frame.x + padding, frame.y + padding,
+                             window.textWidth * kTextScale, window.textHeight * kTextScale};
+        SDL_RenderCopy(renderer, window.texture, nullptr, &destination);
+    }
+    // 送り待ちの点滅カーソル
+    if ((ticks / 400) % 2 == 0) {
+        int cx = frame.x + frame.w - padding - 8;
+        int cy = frame.y + frame.h - padding - 6;
+        for (int row = 0; row < 7; ++row) {
+            SDL_RenderDrawLine(renderer, cx - 7 + row, cy + row, cx + 7 - row, cy + row);
+        }
+    }
+}
+
 enum class Action { None, Forward, TurnLeft, TurnRight, TurnBack };
 
 Action actionForKey(SDL_Scancode key) {
@@ -518,6 +635,14 @@ struct Motion {
     double duration = 1;
     double fromX = 0, fromY = 0, toX = 0, toY = 0;
     double fromAngle = 0, toAngle = 0;
+    bool moved = false;  // 1マス移動（到着時にイベント判定する）
+};
+
+// プレイヤーの所持品とイベント消化状況
+struct GameState {
+    int gold = 0;
+    std::vector<std::string> items;
+    std::unordered_set<std::string> doneEvents;  // eventId(): once メッセージ表示済み / 宝箱開封済み
 };
 
 double smoothstep(double t) { return t * t * (3.0 - 2.0 * t); }
@@ -529,6 +654,7 @@ int main(int argc, char* argv[]) {
         if (SDL_Init(SDL_INIT_VIDEO) != 0) throw std::runtime_error(SDL_GetError());
         if ((IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG) & (IMG_INIT_PNG | IMG_INIT_JPG)) == 0)
             throw std::runtime_error(IMG_GetError());
+        if (TTF_Init() != 0) throw std::runtime_error(TTF_GetError());
 
         SDL_Window* window = SDL_CreateWindow("maze3d", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                                kViewWidth, kViewHeight, SDL_WINDOW_SHOWN);
@@ -570,6 +696,44 @@ int main(int argc, char* argv[]) {
         TextureAsset wallTexture = loadTexture(renderer, wallImage);
         TextureAsset doorTexture = loadTexture(renderer, doorImage);
 
+        fs::path fontPath = exeDir / "assets/fonts/PixelMplus12-Regular.ttf";
+        if (!fs::exists(fontPath)) fontPath = fs::path("assets/fonts/PixelMplus12-Regular.ttf");
+        TTF_Font* font = TTF_OpenFont(fontPath.string().c_str(), kFontPixel);
+        if (!font) throw std::runtime_error(std::string("Cannot load font: ") + TTF_GetError());
+
+        GameState state;
+        MessageWindow messages;
+
+        auto triggerEvent = [&]() {
+            auto found = currentFloor->events.find(edgeKey(cellX, cellY));
+            if (found == currentFloor->events.end()) return;
+            const MapEvent& event = found->second;
+            std::string id = eventId(currentFloorId, cellX, cellY);
+            bool done = state.doneEvents.count(id) > 0;
+            if (event.type == "message") {
+                if (event.once && done) return;
+                messages.push(event.text);
+                if (event.once) state.doneEvents.insert(id);
+            } else if (event.type == "treasure") {
+                if (done) {
+                    messages.push("宝箱は空っぽだ。");
+                    return;
+                }
+                std::string text = event.text.empty() ? "" : event.text + "\n";
+                text += "宝箱を開けた！";
+                if (event.gold > 0) {
+                    state.gold += event.gold;
+                    text += "\n" + std::to_string(event.gold) + " ゴールドを手に入れた。";
+                }
+                if (!event.item.empty()) {
+                    state.items.push_back(event.item);
+                    text += "\n" + event.item + " を手に入れた。";
+                }
+                messages.push(text);
+                state.doneEvents.insert(id);
+            }
+        };
+
         auto startAction = [&](Action action) {
             if (action == Action::None) return;
             double angle = facing * kPi / 2;
@@ -586,6 +750,7 @@ int main(int argc, char* argv[]) {
                 motion.toX = cellX + 0.5;
                 motion.toY = cellY + 0.5;
                 motion.duration = kMoveDuration;
+                motion.moved = true;
             } else if (action == Action::TurnLeft) {
                 facing = (facing + 3) % 4;
                 motion.toAngle = angle - kPi / 2;
@@ -615,6 +780,12 @@ int main(int argc, char* argv[]) {
                 if (event.type == SDL_KEYDOWN && !event.key.repeat) {
                     SDL_Scancode key = event.key.keysym.scancode;
                     if (key == SDL_SCANCODE_Q || key == SDL_SCANCODE_ESCAPE) running = false;
+                    if (messages.open()) {
+                        // メッセージ表示中は送り操作のみ受け付ける
+                        if (key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER || key == SDL_SCANCODE_SPACE || key == SDL_SCANCODE_Z)
+                            messages.advance();
+                        continue;
+                    }
                     Action action = actionForKey(key);
                     if (action != Action::None) pendingAction = action;  // アニメ中の入力は1つだけ先行受付
                     if (key == SDL_SCANCODE_E && !motion.active) {
@@ -645,9 +816,15 @@ int main(int argc, char* argv[]) {
                 viewX = motion.fromX + (motion.toX - motion.fromX) * eased;
                 viewY = motion.fromY + (motion.toY - motion.fromY) * eased;
                 viewAngle = motion.fromAngle + (motion.toAngle - motion.fromAngle) * eased;
-                if (motion.progress >= 1.0) motion.active = false;
+                if (motion.progress >= 1.0) {
+                    motion.active = false;
+                    if (motion.moved) {
+                        triggerEvent();
+                        if (messages.open()) pendingAction = Action::None;  // 先行入力でイベントを素通りしない
+                    }
+                }
             }
-            if (!motion.active) {
+            if (!motion.active && !messages.open()) {
                 viewX = cellX + 0.5;
                 viewY = cellY + 0.5;
                 viewAngle = facing * kPi / 2;
@@ -657,9 +834,14 @@ int main(int argc, char* argv[]) {
             }
 
             drawPseudo3D(renderer, *currentFloor, wallTexture, doorTexture, viewX, viewY, viewAngle);
+            drawMessageWindow(renderer, font, messages, currentTime);
             SDL_RenderPresent(renderer);
-            drawMapPreview(previewRenderer, *currentFloor, map, viewX, viewY, viewAngle);
+            drawMapPreview(previewRenderer, *currentFloor, map, state.doneEvents, viewX, viewY, viewAngle);
         }
+
+        messages.release();
+        TTF_CloseFont(font);
+        TTF_Quit();
 
         if (wallTexture.texture) SDL_DestroyTexture(wallTexture.texture);
         if (doorTexture.texture) SDL_DestroyTexture(doorTexture.texture);

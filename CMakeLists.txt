@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_image CONFIG REQUIRED)
+find_package(SDL2_ttf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
 add_executable(maze3d game.cpp)
@@ -17,6 +18,7 @@ target_link_libraries(maze3d PRIVATE
     SDL2::SDL2
     SDL2::SDL2main
     SDL2_image::SDL2_image
+    $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
     nlohmann_json::nlohmann_json
 )
 

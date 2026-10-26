@@ -19,6 +19,8 @@ DOOR_OUTLINE = "#8a6400"
 FACINGS = ["N", "E", "S", "W"]
 FACING_VECTORS = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}
 FACING_LABELS = {"N": "北", "E": "東", "S": "南", "W": "西"}
+# イベントマスの種類
+EVENT_TYPES = {"message": "メッセージ", "treasure": "宝箱"}
 
 
 def validate_size(value: Any, label: str) -> int:
@@ -34,6 +36,34 @@ def parse_coordinate(value: Any, label: str) -> tuple[int, int]:
             or any(isinstance(part, bool) or not isinstance(part, int) for part in value)):
         raise ValueError(f"{label}.locate は整数2個の配列で指定してください。")
     return value[0], value[1]
+
+
+def parse_event(raw: Any, label: str) -> dict[str, Any]:
+    """JSONのイベント定義を検証し、locate を除いた正規化済みの辞書を返す。"""
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} はオブジェクトではありません。")
+    kind = raw.get("type")
+    if kind not in EVENT_TYPES:
+        raise ValueError(f"{label}.type は {' / '.join(EVENT_TYPES)} のいずれかです。")
+    text = raw.get("text", "")
+    if not isinstance(text, str):
+        raise ValueError(f"{label}.text は文字列で指定してください。")
+    event: dict[str, Any] = {"type": kind, "text": text}
+    if kind == "message":
+        once = raw.get("once", False)
+        if not isinstance(once, bool):
+            raise ValueError(f"{label}.once は true / false で指定してください。")
+        event["once"] = once
+    else:
+        gold = raw.get("gold", 0)
+        item = raw.get("item", "")
+        if isinstance(gold, bool) or not isinstance(gold, int) or gold < 0:
+            raise ValueError(f"{label}.gold は0以上の整数で指定してください。")
+        if not isinstance(item, str):
+            raise ValueError(f"{label}.item は文字列で指定してください。")
+        event["gold"] = gold
+        event["item"] = item
+    return event
 
 
 class MapCanvas(tk.Canvas):
@@ -88,6 +118,8 @@ class MapCanvas(tk.Canvas):
             self._place_cell_tool(x, y, self.editor.place_stair)
         elif tool == "spawn":
             self._place_cell_tool(x, y, self.editor.place_spawn)
+        elif tool == "event":
+            self._place_cell_tool(x, y, self.editor.edit_event)
         elif tool == "erase" and not self.dragged:
             self._apply_erase(x, y)
         self.press_point = None
@@ -231,6 +263,19 @@ class MapCanvas(tk.Canvas):
             else:
                 self.create_line(x1, y1, x2, y2, fill="#263238", width=5, capstyle=tk.ROUND)
 
+        for (event_x, event_y), event in floor["events"].items():
+            x1 = left + event_x * CELL_SIZE + 6
+            y1 = top + event_y * CELL_SIZE + 6
+            x2, y2 = x1 + CELL_SIZE - 12, y1 + CELL_SIZE - 12
+            if event["type"] == "treasure":
+                self.create_rectangle(x1, y1 + 6, x2, y2, fill="#c98b3c", outline="#5c3a12", width=2)
+                self.create_line(x1, y1 + 16, x2, y1 + 16, fill="#5c3a12", width=2)
+                self.create_text((x1 + x2) / 2, y1 + 24, text="宝", fill="#2b1a06", font=("Segoe UI", 9, "bold"))
+            else:
+                self.create_rectangle(x1, y1, x2, y2, fill="#cfe8ff", outline="#2f6db5", width=2)
+                self.create_text((x1 + x2) / 2, (y1 + y2) / 2, text="!", fill="#1d4f8f",
+                                 font=("Segoe UI", 14, "bold"))
+
         for stair in self.editor.stairs:
             for end in stair["ends"]:
                 if end["floorId"] != floor["id"]:
@@ -271,6 +316,91 @@ class MapCanvas(tk.Canvas):
             self.create_oval(cx - 15, cy - 15, cx + 15, cy + 15,
                              fill="#5b8def", outline="#244b91", width=2)
             self.create_text(cx, cy, text="P", fill="white", font=("Segoe UI", 11, "bold"))
+
+
+class EventDialog(tk.Toplevel):
+    """イベントマスの編集ダイアログ。result は None（キャンセル）/ "delete" / イベント辞書。"""
+
+    def __init__(self, master: tk.Misc, cell: tuple[int, int], event: dict[str, Any] | None) -> None:
+        super().__init__(master)
+        self.title(f"イベント編集 {cell}")
+        self.transient(master)
+        self.resizable(False, False)
+        self.result: dict[str, Any] | str | None = None
+        existing = event is not None
+        event = event or {"type": "message", "text": "", "once": False}
+        self.kind = tk.StringVar(value=event["type"])
+        self.once = tk.BooleanVar(value=event.get("once", False))
+        self.gold = tk.StringVar(value=str(event.get("gold", 0)))
+        self.item = tk.StringVar(value=event.get("item", ""))
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill=tk.BOTH, expand=True)
+        kinds = ttk.Frame(body)
+        kinds.grid(row=0, column=0, columnspan=2, sticky="w")
+        for value, label in EVENT_TYPES.items():
+            ttk.Radiobutton(kinds, text=label, value=value, variable=self.kind,
+                            command=self._update_state).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(body, text="メッセージ（改行可）:").grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 2))
+        self.text = tk.Text(body, width=40, height=5, wrap=tk.CHAR, font=("Yu Gothic UI", 10))
+        self.text.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.text.insert("1.0", event.get("text", ""))
+        self.once_check = ttk.Checkbutton(body, text="1回だけ表示する", variable=self.once)
+        self.once_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(body, text="ゴールド:").grid(row=4, column=0, sticky="w", pady=(8, 0))
+        self.gold_entry = ttk.Spinbox(body, from_=0, to=999999, textvariable=self.gold, width=10)
+        self.gold_entry.grid(row=4, column=1, sticky="w", pady=(8, 0))
+        ttk.Label(body, text="アイテム名:").grid(row=5, column=0, sticky="w", pady=(4, 0))
+        self.item_entry = ttk.Entry(body, textvariable=self.item, width=24)
+        self.item_entry.grid(row=5, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(body, text="宝箱は一度開けると空になります。", foreground="#687078").grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        if existing:
+            ttk.Button(buttons, text="削除", command=self._delete).pack(side=tk.LEFT, padx=(0, 16))
+        ttk.Button(buttons, text="OK", command=self._ok).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="キャンセル", command=self.destroy).pack(side=tk.LEFT, padx=(6, 0))
+
+        self._update_state()
+        self.geometry(f"+{master.winfo_rootx() + 260}+{master.winfo_rooty() + 80}")
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.text.focus_set()
+        self.grab_set()
+        self.wait_window(self)
+
+    def _update_state(self) -> None:
+        treasure = self.kind.get() == "treasure"
+        self.once_check.configure(state=tk.DISABLED if treasure else tk.NORMAL)
+        self.gold_entry.configure(state=tk.NORMAL if treasure else tk.DISABLED)
+        self.item_entry.configure(state=tk.NORMAL if treasure else tk.DISABLED)
+
+    def _ok(self) -> None:
+        text = self.text.get("1.0", "end-1c").rstrip()
+        if self.kind.get() == "message":
+            if not text:
+                messagebox.showerror("入力エラー", "メッセージを入力してください。", parent=self)
+                return
+            self.result = {"type": "message", "text": text, "once": self.once.get()}
+        else:
+            try:
+                gold = int(self.gold.get() or 0)
+            except ValueError:
+                gold = -1
+            if gold < 0:
+                messagebox.showerror("入力エラー", "ゴールドは0以上の整数で入力してください。", parent=self)
+                return
+            item = self.item.get().strip()
+            if gold == 0 and not item:
+                messagebox.showerror("入力エラー", "ゴールドかアイテム名のどちらかを指定してください。", parent=self)
+                return
+            self.result = {"type": "treasure", "text": text, "gold": gold, "item": item}
+        self.destroy()
+
+    def _delete(self) -> None:
+        self.result = "delete"
+        self.destroy()
 
 
 class MapEditor(tk.Tk):
@@ -340,7 +470,7 @@ class MapEditor(tk.Tk):
 
     @staticmethod
     def _new_floor(floor_id: str, width: int, height: int) -> dict[str, Any]:
-        return {"id": floor_id, "width": width, "height": height, "edges": {}}
+        return {"id": floor_id, "width": width, "height": height, "edges": {}, "events": {}}
 
     @property
     def current_floor(self) -> dict[str, Any]:
@@ -395,6 +525,7 @@ class MapEditor(tk.Tk):
             ("erase", "消去"),
             ("stair", "階段（両端を指定）"),
             ("spawn", "ゲーム開始地点"),
+            ("event", "イベント（メッセージ／宝箱）"),
         ]
         for value, text in tools:
             ttk.Radiobutton(sidebar, text=text, value=value, variable=self.tool,
@@ -402,8 +533,8 @@ class MapEditor(tk.Tk):
 
         ttk.Separator(sidebar).pack(fill=tk.X, pady=10)
         ttk.Label(sidebar, text="凡例", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
-        ttk.Label(sidebar, text="■ 壁  ■ ドア  ● 階段  ● P 開始", foreground="#495057").pack(anchor=tk.W, pady=4)
-        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\n\n点線の外側も描画できます。",
+        ttk.Label(sidebar, text="■ 壁  ■ ドア  ● 階段  ● P 開始  ! イベント", foreground="#495057").pack(anchor=tk.W, pady=4)
+        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベントはセルをクリックして編集。\n\n点線の外側も描画できます。",
                   justify=tk.LEFT, wraplength=220).pack(anchor=tk.W, pady=(6, 0))
 
         area = ttk.Frame(outer)
@@ -458,7 +589,7 @@ class MapEditor(tk.Tk):
             self.pending_stair = None
             self.canvas.redraw()
         labels = {"wall": "壁", "door": "ドア", "erase": "消去",
-                  "stair": "階段", "spawn": "ゲーム開始地点"}
+                  "stair": "階段", "spawn": "ゲーム開始地点", "event": "イベント"}
         self.status.set(f"{labels[self.tool.get()]}ツールを選択しました。")
 
     def mark_changed(self) -> None:
@@ -505,6 +636,22 @@ class MapEditor(tk.Tk):
         self.spawn = {"floorId": self.current_floor["id"], "locate": locate, "facing": facing}
         self.mark_changed()
         self.status.set(message)
+        self.canvas.redraw()
+
+    def edit_event(self, cell: tuple[int, int]) -> None:
+        floor = self.current_floor
+        current = floor["events"].get(cell)
+        dialog = EventDialog(self, cell, current)
+        if dialog.result is None:
+            return
+        if dialog.result == "delete":
+            floor["events"].pop(cell, None)
+            self.status.set(f"{floor['id']} {cell} のイベントを削除しました。")
+        else:
+            self.expand_for_cell(cell)
+            floor["events"][cell] = dialog.result
+            self.status.set(f"{floor['id']} {cell} に{EVENT_TYPES[dialog.result['type']]}イベントを設定しました。")
+        self.mark_changed()
         self.canvas.redraw()
 
     def expand_for_edge(self, edge: tuple[str, int, int]) -> None:
@@ -566,6 +713,11 @@ class MapEditor(tk.Tk):
             self.spawn = None
             self.mark_changed()
             self.status.set("ゲーム開始地点を解除しました。")
+            return
+        if (cell_x, cell_y) in floor["events"]:
+            del floor["events"][(cell_x, cell_y)]
+            self.mark_changed()
+            self.status.set("イベントを削除しました。")
             return
         for index in range(len(self.stairs) - 1, -1, -1):
             stair = self.stairs[index]
@@ -633,8 +785,9 @@ class MapEditor(tk.Tk):
                              for end in stair["ends"])]
         out_spawn = bool(self.spawn and self.spawn["floorId"] == floor["id"]
                  and (self.spawn["locate"][0] >= width or self.spawn["locate"][1] >= height))
-        if (out_edges or out_stairs or out_spawn) and not messagebox.askyesno(
-            "範囲外データ", f"範囲外になる線分 {len(out_edges)} 本、階段 {len(out_stairs)} 件、開始地点 {'1件' if out_spawn else '0件'}を削除して変更しますか？",
+        out_events = [cell for cell in floor["events"] if cell[0] >= width or cell[1] >= height]
+        if (out_edges or out_stairs or out_spawn or out_events) and not messagebox.askyesno(
+            "範囲外データ", f"範囲外になる線分 {len(out_edges)} 本、階段 {len(out_stairs)} 件、イベント {len(out_events)} 件、開始地点 {'1件' if out_spawn else '0件'}を削除して変更しますか？",
                 parent=self):
             return
         for edge in out_edges:
@@ -644,6 +797,8 @@ class MapEditor(tk.Tk):
             self.stairs = [stair for stair in self.stairs if stair["id"] not in removed]
         if out_spawn:
             self.spawn = None
+        for cell in out_events:
+            del floor["events"][cell]
         floor["width"], floor["height"] = width, height
         self._update_map_label()
         self.canvas.redraw()
@@ -753,6 +908,16 @@ class MapEditor(tk.Tk):
                         previous = floor["edges"][edge]
                         overlaps.append(f"{floor_id} {axis} {edge[1:]}: {previous} → {kind}（定義 {edge_number}）")
                     floor["edges"][edge] = kind
+            raw_events = raw_floor.get("events", [])
+            if not isinstance(raw_events, list):
+                raise ValueError(f"{floor_id}.events は配列で指定してください。")
+            for event_number, raw_event in enumerate(raw_events):
+                label = f"{floor_id}.events[{event_number}]"
+                event = parse_event(raw_event, label)
+                ex, ey = parse_coordinate(raw_event.get("locate"), label)
+                if not 0 <= ex < width or not 0 <= ey < height:
+                    raise ValueError(f"{label} がセル範囲外です。")
+                floor["events"][(ex, ey)] = event
             floors.append(floor)
 
         raw_stairs = document.get("stairs", [])
@@ -830,6 +995,8 @@ class MapEditor(tk.Tk):
                 "width": floor["width"],
                 "height": floor["height"],
                 "edges": self._compress_edges(floor["edges"]),
+                "events": [{"locate": [x, y], **event} for (x, y), event in
+                           sorted(floor["events"].items(), key=lambda item: (item[0][1], item[0][0]))],
             })
         document = {
             "version": SCHEMA_VERSION,
