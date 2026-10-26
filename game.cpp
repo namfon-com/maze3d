@@ -468,11 +468,12 @@ fs::path executableDirectory() {
 
 fs::path findMapPath(int argc, char* argv[], const fs::path& exeDir) {
     if (argc >= 2) return argv[1];
+    const fs::path mapFile = fs::path("map_editor") / "utsuro.json";
     const fs::path candidates[] = {
-        exeDir / "map_editor/mymap00.json",
-        exeDir / "../map_editor/mymap00.json",
-        exeDir / "../../map_editor/mymap00.json",
-        fs::path("map_editor/mymap00.json")
+        exeDir / mapFile,
+        exeDir / ".." / mapFile,
+        exeDir / ".." / ".." / mapFile,
+        mapFile
     };
     for (const fs::path& candidate : candidates) {
         if (fs::exists(candidate)) return candidate;

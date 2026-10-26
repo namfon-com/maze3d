@@ -1,0 +1,1271 @@
+{
+  "version": 1,
+  "floors": [
+    {
+      "id": "1F",
+      "width": 21,
+      "height": 26,
+      "edges": [
+        {
+          "axis": "h",
+          "locate": [
+            1,
+            0
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            1
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            3,
+            3
+          ],
+          "type": "wall",
+          "length": 5
+        },
+        {
+          "axis": "h",
+          "locate": [
+            0,
+            4
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            3,
+            4
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            3,
+            5
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            0,
+            6
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            6
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            8,
+            6
+          ],
+          "type": "wall",
+          "length": 5
+        },
+        {
+          "axis": "h",
+          "locate": [
+            12,
+            7
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            12,
+            8
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            12,
+            9
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            1,
+            10
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "h",
+          "locate": [
+            10,
+            10
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            11
+          ],
+          "type": "wall",
+          "length": 5
+        },
+        {
+          "axis": "h",
+          "locate": [
+            12,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            14,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            16,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            12,
+            12
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            14,
+            12
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            16,
+            12
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            1,
+            12
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            5,
+            12
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            8,
+            12
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            11,
+            12
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            13,
+            12
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            15,
+            12
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            12,
+            13
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            16,
+            13
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            13
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            8,
+            13
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            11,
+            13
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            15,
+            13
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            5,
+            14
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            7,
+            14
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            1,
+            14
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            8,
+            14
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            12,
+            14
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            16,
+            14
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            2,
+            15
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            15
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            7,
+            15
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            11,
+            15
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            15,
+            15
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            3,
+            16
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            15,
+            16
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            4,
+            17
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            7,
+            17
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            9,
+            17
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            14,
+            17
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            16,
+            17
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            5,
+            18
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            14,
+            18
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            16,
+            18
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            14,
+            19
+          ],
+          "type": "door",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            9,
+            19
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            11,
+            19
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            9,
+            20
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            11,
+            20
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            14,
+            20
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            9,
+            21
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "h",
+          "locate": [
+            13,
+            22
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            8,
+            22
+          ],
+          "type": "wall",
+          "length": 5
+        },
+        {
+          "axis": "h",
+          "locate": [
+            14,
+            22
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            17,
+            22
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "h",
+          "locate": [
+            16,
+            23
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            13,
+            24
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "h",
+          "locate": [
+            16,
+            25
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            15,
+            26
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
+            17,
+            26
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            0,
+            4
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            1,
+            0
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            1,
+            10
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            2,
+            14
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            4
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            10
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            12
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            14
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            3
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            5
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            13
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            3,
+            15
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            4,
+            4
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            4,
+            0
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            4,
+            3
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            4,
+            5
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            4,
+            11
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            4,
+            16
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            5,
+            1
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            5,
+            6
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            5,
+            11
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "v",
+          "locate": [
+            5,
+            17
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            6,
+            11
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            6,
+            14
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            7,
+            12
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            7,
+            13
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            7,
+            17
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            8,
+            3
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "v",
+          "locate": [
+            8,
+            9
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            8,
+            11
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            8,
+            14
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            8,
+            17
+          ],
+          "type": "wall",
+          "length": 5
+        },
+        {
+          "axis": "v",
+          "locate": [
+            9,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            9,
+            13
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            9,
+            17
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            10,
+            7
+          ],
+          "type": "door",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            10,
+            6
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            10,
+            9
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            11,
+            10
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            11,
+            13
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            12,
+            6
+          ],
+          "type": "door",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            12,
+            18
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            12,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            12,
+            13
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            12,
+            17
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            12,
+            19
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            13,
+            6
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            13,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            13,
+            13
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            13,
+            22
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            14,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            14,
+            17
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "v",
+          "locate": [
+            15,
+            16
+          ],
+          "type": "door",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            15,
+            25
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            15,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            15,
+            13
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            15,
+            19
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            15,
+            22
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "v",
+          "locate": [
+            16,
+            16
+          ],
+          "type": "door",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
+            16,
+            11
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            16,
+            13
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            16,
+            19
+          ],
+          "type": "wall",
+          "length": 4
+        },
+        {
+          "axis": "v",
+          "locate": [
+            16,
+            25
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            17,
+            11
+          ],
+          "type": "wall",
+          "length": 3
+        },
+        {
+          "axis": "v",
+          "locate": [
+            17,
+            15
+          ],
+          "type": "wall",
+          "length": 5
+        },
+        {
+          "axis": "v",
+          "locate": [
+            17,
+            22
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            17,
+            25
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            21,
+            22
+          ],
+          "type": "wall",
+          "length": 4
+        }
+      ]
+    }
+  ],
+  "stairs": [],
+  "spawn": {
+    "floorId": "1F",
+    "locate": [
+      6,
+      16
+    ]
+  }
+}
