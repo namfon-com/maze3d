@@ -30,6 +30,7 @@ struct MapData {
     std::vector<Floor> floors;
     std::vector<Stair> stairs;
     StairEnd spawn;
+    int spawnFacing = 3;  // facing 番号 (0=東 1=南 2=西 3=北)。省略時は北
 };
 
 std::uint64_t edgeKey(int x, int y) {
@@ -82,6 +83,12 @@ MapData loadMap(const fs::path& path) {
         map.spawn.floorId = document["spawn"].at("floorId").get<std::string>();
         map.spawn.x = document["spawn"].at("locate").at(0).get<int>();
         map.spawn.y = document["spawn"].at("locate").at(1).get<int>();
+        std::string facing = document["spawn"].value("facing", "N");
+        if (facing == "E") map.spawnFacing = 0;
+        else if (facing == "S") map.spawnFacing = 1;
+        else if (facing == "W") map.spawnFacing = 2;
+        else if (facing == "N") map.spawnFacing = 3;
+        else throw std::runtime_error("spawn.facing must be one of N/E/S/W");
     } else if (!map.floors.empty()) {
         map.spawn.floorId = map.floors.front().id;
     }
@@ -546,7 +553,7 @@ int main(int argc, char* argv[]) {
 
         int cellX = map.spawn.x;
         int cellY = map.spawn.y;
-        int facing = 2;  // 西向きで開始
+        int facing = map.spawnFacing;
         double viewX = cellX + 0.5;
         double viewY = cellY + 0.5;
         double viewAngle = facing * kPi / 2;

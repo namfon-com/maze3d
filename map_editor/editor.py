@@ -13,6 +13,10 @@ GRID_ORIGIN = 40
 MIN_MAP_SIZE = 1
 MAX_MAP_SIZE = 200
 EDGE_TYPES = {"wall", "door"}
+# 開始時の向き（時計回り順）。y はマップ下方向が正
+FACINGS = ["N", "E", "S", "W"]
+FACING_VECTORS = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}
+FACING_LABELS = {"N": "北", "E": "東", "S": "南", "W": "西"}
 
 
 def validate_size(value: Any, label: str) -> int:
@@ -248,6 +252,13 @@ class MapCanvas(tk.Canvas):
         if spawn and spawn["floorId"] == floor["id"]:
             cx = left + (spawn["locate"][0] + 0.5) * CELL_SIZE
             cy = top + (spawn["locate"][1] + 0.5) * CELL_SIZE
+            dx, dy = FACING_VECTORS[spawn.get("facing", "N")]
+            # 向きを示す三角形（円の外側に突き出す）
+            px, py = -dy, dx
+            self.create_polygon(cx + dx * 22, cy + dy * 22,
+                                cx + dx * 10 + px * 9, cy + dy * 10 + py * 9,
+                                cx + dx * 10 - px * 9, cy + dy * 10 - py * 9,
+                                fill="#244b91", outline="#244b91")
             self.create_oval(cx - 15, cy - 15, cx + 15, cy + 15,
                              fill="#5b8def", outline="#244b91", width=2)
             self.create_text(cx, cy, text="P", fill="white", font=("Segoe UI", 11, "bold"))
@@ -473,9 +484,18 @@ class MapEditor(tk.Tk):
 
     def place_spawn(self, cell: tuple[int, int]) -> None:
         self.expand_for_cell(cell)
-        self.spawn = {"floorId": self.current_floor["id"], "locate": [cell[0], cell[1]]}
+        locate = [cell[0], cell[1]]
+        facing = self.spawn.get("facing", "N") if self.spawn else "N"
+        if self.spawn and self.spawn["floorId"] == self.current_floor["id"] and self.spawn["locate"] == locate:
+            # 同じセルを再クリックすると時計回りに向きを変える
+            facing = FACINGS[(FACINGS.index(facing) + 1) % len(FACINGS)]
+            message = f"ゲーム開始の向きを {FACING_LABELS[facing]} に変更しました。"
+        else:
+            message = (f"ゲーム開始地点を {self.current_floor['id']} の {cell}（{FACING_LABELS[facing]}）に設定しました。"
+                       "同じセルを再クリックで向きを変更。")
+        self.spawn = {"floorId": self.current_floor["id"], "locate": locate, "facing": facing}
         self.mark_changed()
-        self.status.set(f"ゲーム開始地点を {self.current_floor['id']} の {cell} に設定しました。")
+        self.status.set(message)
         self.canvas.redraw()
 
     def expand_for_edge(self, edge: tuple[str, int, int]) -> None:
@@ -765,7 +785,10 @@ class MapEditor(tk.Tk):
             spawn_floor = floor_by_id[spawn_floor_id]
             if not 0 <= spawn_x < spawn_floor["width"] or not 0 <= spawn_y < spawn_floor["height"]:
                 raise ValueError("spawn.locate がセル範囲外です。")
-            spawn = {"floorId": spawn_floor_id, "locate": [spawn_x, spawn_y]}
+            spawn_facing = raw_spawn.get("facing", "N")
+            if spawn_facing not in FACINGS:
+                raise ValueError("spawn.facing は N / E / S / W のいずれかで指定してください。")
+            spawn = {"floorId": spawn_floor_id, "locate": [spawn_x, spawn_y], "facing": spawn_facing}
         return floors, stairs, spawn, overlaps
 
     def save(self) -> bool:
