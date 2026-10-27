@@ -38,6 +38,8 @@ struct Floor {
     std::unordered_map<std::uint64_t, std::string> hEdges;
     std::unordered_map<std::uint64_t, std::string> vEdges;
     std::unordered_map<std::uint64_t, MapEvent> events;  // key = edgeKey(セルx, セルy)
+    // 看板: そのセルで指定の向きを向いて立ち止まっている間だけ表示する（操作は止めない）
+    std::unordered_map<std::uint64_t, std::string> signs[4];  // [facing][edgeKey(セルx, セルy)] = 文字
 };
 struct MapData {
     int version = 1;
@@ -55,6 +57,15 @@ std::uint64_t edgeKey(int x, int y) {
 const Floor* findFloor(const MapData& map, const std::string& id) {
     for (const Floor& floor : map.floors) if (floor.id == id) return &floor;
     return nullptr;
+}
+
+// "E"/"S"/"W"/"N" → facing 番号 (0=東 1=南 2=西 3=北)。不正なら -1
+int facingIndex(const std::string& facing) {
+    if (facing == "E") return 0;
+    if (facing == "S") return 1;
+    if (facing == "W") return 2;
+    if (facing == "N") return 3;
+    return -1;
 }
 
 MapData loadMap(const fs::path& path) {
@@ -95,6 +106,13 @@ MapData loadMap(const fs::path& path) {
             int y = evj.at("locate").at(1).get<int>();
             floor.events[edgeKey(x, y)] = event;
         }
+        for (const auto& sj : fj.value("signs", json::array())) {
+            int facing = facingIndex(sj.at("facing").get<std::string>());
+            if (facing < 0) throw std::runtime_error("sign.facing must be one of N/E/S/W");
+            int x = sj.at("locate").at(0).get<int>();
+            int y = sj.at("locate").at(1).get<int>();
+            floor.signs[facing][edgeKey(x, y)] = sj.at("text").get<std::string>();
+        }
         map.floors.push_back(std::move(floor));
     }
     for (const auto& sj : document.value("stairs", json::array())) {
@@ -111,12 +129,8 @@ MapData loadMap(const fs::path& path) {
         map.spawn.floorId = document["spawn"].at("floorId").get<std::string>();
         map.spawn.x = document["spawn"].at("locate").at(0).get<int>();
         map.spawn.y = document["spawn"].at("locate").at(1).get<int>();
-        std::string facing = document["spawn"].value("facing", "N");
-        if (facing == "E") map.spawnFacing = 0;
-        else if (facing == "S") map.spawnFacing = 1;
-        else if (facing == "W") map.spawnFacing = 2;
-        else if (facing == "N") map.spawnFacing = 3;
-        else throw std::runtime_error("spawn.facing must be one of N/E/S/W");
+        map.spawnFacing = facingIndex(document["spawn"].value("facing", "N"));
+        if (map.spawnFacing < 0) throw std::runtime_error("spawn.facing must be one of N/E/S/W");
     } else if (!map.floors.empty()) {
         map.spawn.floorId = map.floors.front().id;
     }
@@ -517,6 +531,20 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
         SDL_RenderFillRect(renderer, &marker);
     }
 
+    // 看板: 見る向きの辺の内側に小さな札
+    SDL_SetRenderDrawColor(renderer, 255, 230, 160, 255);
+    for (int facing = 0; facing < 4; ++facing) {
+        for (const auto& [key, text] : floor.signs[facing]) {
+            int x = static_cast<int>(key >> 32);
+            int y = static_cast<int>(key & 0xffffffffu);
+            int size = std::max(3, cellSize / 6);
+            int centerX = originX + x * cellSize + cellSize / 2 + kDirX[facing] * (cellSize / 2 - size);
+            int centerY = originY + y * cellSize + cellSize / 2 + kDirY[facing] * (cellSize / 2 - size);
+            SDL_Rect tag{centerX - size / 2, centerY - size / 2, size, size};
+            SDL_RenderFillRect(renderer, &tag);
+        }
+    }
+
     for (const Stair& stair : map.stairs) {
         for (const StairEnd& end : stair.ends) {
             if (end.floorId != floor.id) continue;
@@ -731,6 +759,32 @@ void drawFrame(SDL_Renderer* renderer, const SDL_Rect& frame) {
     }
     SDL_Rect inner{frame.x + 7, frame.y + 7, frame.w - 14, frame.h - 14};
     SDL_RenderDrawRect(renderer, &inner);
+}
+
+// 看板: 3D 画面の上部中央に、枠付きのプレートで文字を出す。alpha (0..1) でフェードイン
+void drawSign(SDL_Renderer* renderer, TTF_Font* font, TextCache& cache, const std::string& text, double alpha) {
+    const TextCache::Entry& entry = cache.get(renderer, font, text);
+    if (!entry.texture) return;
+    Uint8 a = static_cast<Uint8>(std::clamp(alpha, 0.0, 1.0) * 255);
+    const int textWidth = entry.width * kTextScale;
+    const int textHeight = entry.height * kTextScale;
+    SDL_Rect plate{(kViewWidth - textWidth) / 2 - 24, 28, textWidth + 48, textHeight + 24};
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 20, 14, 6, static_cast<Uint8>(a * 0.85));
+    SDL_RenderFillRect(renderer, &plate);
+    SDL_SetRenderDrawColor(renderer, 242, 194, 48, a);
+    for (int i = 0; i < 2; ++i) {
+        SDL_Rect border{plate.x + i, plate.y + i, plate.w - i * 2, plate.h - i * 2};
+        SDL_RenderDrawRect(renderer, &border);
+    }
+    SDL_Rect inner{plate.x + 5, plate.y + 5, plate.w - 10, plate.h - 10};
+    SDL_RenderDrawRect(renderer, &inner);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    SDL_SetTextureColorMod(entry.texture, 255, 230, 160);
+    SDL_SetTextureAlphaMod(entry.texture, a);
+    SDL_Rect destination{plate.x + 24, plate.y + 12, textWidth, textHeight};
+    SDL_RenderCopy(renderer, entry.texture, nullptr, &destination);
+    SDL_SetTextureAlphaMod(entry.texture, 255);
 }
 
 // 顔グラフィック。assets/portraits/ の画像を使い、無ければ人物シルエットを描く
@@ -1103,6 +1157,10 @@ int main(int argc, char* argv[]) {
             motion.active = true;
         };
 
+        const std::string* shownSign = nullptr;
+        Uint32 signStart = 0;
+        constexpr double kSignFadeMs = 180.0;
+
         bool running = true;
         Uint32 previousTime = SDL_GetTicks();
         while (running) {
@@ -1178,6 +1236,17 @@ int main(int argc, char* argv[]) {
             }
 
             drawPseudo3D(renderer, *currentFloor, wallTexture, doorTexture, viewX, viewY, viewAngle);
+            // 看板は立ち止まっている間だけ表示（押しっぱなしで歩き続けるときは出ない）
+            const std::string* sign = nullptr;
+            if (!motion.active) {
+                auto found = currentFloor->signs[facing].find(edgeKey(cellX, cellY));
+                if (found != currentFloor->signs[facing].end()) sign = &found->second;
+            }
+            if (sign != shownSign) {
+                shownSign = sign;
+                signStart = currentTime;
+            }
+            if (sign) drawSign(renderer, font, textCache, *sign, (currentTime - signStart) / kSignFadeMs);
             drawPartyPanel(renderer, font, textCache, portraits, state.party);
             drawMessageWindow(renderer, font, textCache, portraits, database.characters, messages, currentTime);
             SDL_RenderPresent(renderer);

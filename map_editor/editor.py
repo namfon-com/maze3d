@@ -15,6 +15,8 @@ MAX_MAP_SIZE = 200
 EDGE_TYPES = {"wall", "door"}
 DOOR_COLOR = "#f2c230"
 DOOR_OUTLINE = "#8a6400"
+SIGN_COLOR = "#fff1c8"
+SIGN_TEXT = "#6b4a00"
 # 開始時の向き（時計回り順）。y はマップ下方向が正
 FACINGS = ["N", "E", "S", "W"]
 FACING_VECTORS = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}
@@ -138,6 +140,10 @@ class MapCanvas(tk.Canvas):
             self._place_cell_tool(x, y, self.editor.place_spawn)
         elif tool == "event":
             self._place_cell_tool(x, y, self.editor.edit_event)
+        elif tool == "sign":
+            gx, gy = self._grid_position(x, y)
+            if self._in_work_area(gx, gy) and gx >= 0 and gy >= 0:
+                self.editor.edit_sign((int(gx), int(gy)), self._nearest_side(gx, gy))
         elif tool == "erase" and not self.dragged:
             self._apply_erase(x, y)
         self.press_point = None
@@ -227,6 +233,13 @@ class MapCanvas(tk.Canvas):
         if 0 <= cell[0] < MAX_MAP_SIZE and 0 <= cell[1] < MAX_MAP_SIZE:
             callback(cell)
 
+    @staticmethod
+    def _nearest_side(gx: float, gy: float) -> str:
+        """セル内のクリック位置から一番近い辺の向き（その辺を向いて立つ）。"""
+        fx, fy = gx - int(gx), gy - int(gy)
+        distances = {"N": fy, "S": 1 - fy, "W": fx, "E": 1 - fx}
+        return min(distances, key=distances.get)
+
     def _apply_erase(self, x: float, y: float) -> None:
         gx, gy = self._grid_position(x, y)
         self.editor.erase_near(x, y, gx, gy)
@@ -297,6 +310,18 @@ class MapCanvas(tk.Canvas):
                 self.create_rectangle(x1, y1, x2, y2, fill="#cfe8ff", outline="#2f6db5", width=2)
                 self.create_text((x1 + x2) / 2, (y1 + y2) / 2, text="!", fill="#1d4f8f",
                                  font=("Segoe UI", 14, "bold"))
+
+        for (sign_x, sign_y, facing), text in floor["signs"].items():
+            # 看板: 見る向きの辺の内側に札（先頭の数文字を表示）
+            dx, dy = FACING_VECTORS[facing]
+            cx = left + (sign_x + 0.5 + dx * 0.3) * CELL_SIZE
+            cy = top + (sign_y + 0.5 + dy * 0.3) * CELL_SIZE
+            label = text.splitlines()[0] if text else ""
+            label = label[:4] + ("…" if len(label) > 4 else "")
+            item = self.create_text(cx, cy, text=label, fill=SIGN_TEXT, font=("Segoe UI", 7, "bold"))
+            x1, y1, x2, y2 = self.bbox(item)
+            self.create_rectangle(x1 - 2, y1, x2 + 2, y2, fill=SIGN_COLOR, outline=SIGN_TEXT)
+            self.tag_raise(item)
 
         for stair in self.editor.stairs:
             for end in stair["ends"]:
@@ -514,7 +539,7 @@ class MapEditor(tk.Tk):
 
     @staticmethod
     def _new_floor(floor_id: str, width: int, height: int) -> dict[str, Any]:
-        return {"id": floor_id, "width": width, "height": height, "edges": {}, "events": {}}
+        return {"id": floor_id, "width": width, "height": height, "edges": {}, "events": {}, "signs": {}}
 
     @property
     def current_floor(self) -> dict[str, Any]:
@@ -570,6 +595,7 @@ class MapEditor(tk.Tk):
             ("stair", "階段（両端を指定）"),
             ("spawn", "ゲーム開始地点"),
             ("event", "イベント（メッセージ／宝箱／人間）"),
+            ("sign", "看板（立ち止まると表示）"),
         ]
         for value, text in tools:
             ttk.Radiobutton(sidebar, text=text, value=value, variable=self.tool,
@@ -578,7 +604,7 @@ class MapEditor(tk.Tk):
         ttk.Separator(sidebar).pack(fill=tk.X, pady=10)
         ttk.Label(sidebar, text="凡例", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
         ttk.Label(sidebar, text="■ 壁  ■ ドア  ● 階段  ● P 開始  ! イベント", foreground="#495057").pack(anchor=tk.W, pady=4)
-        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間）は\nセルをクリックして編集。\n\n点線の外側も描画できます。",
+        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間）は\nセルをクリックして編集。\n看板はセル内の、見る方向の辺の\n近くをクリック（文字を空で削除）。\n\n点線の外側も描画できます。",
                   justify=tk.LEFT, wraplength=220).pack(anchor=tk.W, pady=(6, 0))
 
         area = ttk.Frame(outer)
@@ -633,7 +659,7 @@ class MapEditor(tk.Tk):
             self.pending_stair = None
             self.canvas.redraw()
         labels = {"wall": "壁", "door": "ドア", "erase": "消去",
-                  "stair": "階段", "spawn": "ゲーム開始地点", "event": "イベント"}
+                  "stair": "階段", "spawn": "ゲーム開始地点", "event": "イベント", "sign": "看板"}
         self.status.set(f"{labels[self.tool.get()]}ツールを選択しました。")
 
     def mark_changed(self) -> None:
@@ -695,6 +721,28 @@ class MapEditor(tk.Tk):
             self.expand_for_cell(cell)
             floor["events"][cell] = dialog.result
             self.status.set(f"{floor['id']} {cell} に{EVENT_TYPES[dialog.result['type']]}イベントを設定しました。")
+        self.mark_changed()
+        self.canvas.redraw()
+
+    def edit_sign(self, cell: tuple[int, int], facing: str) -> None:
+        floor = self.current_floor
+        key = (cell[0], cell[1], facing)
+        current = floor["signs"].get(key, "")
+        text = simpledialog.askstring(
+            "看板", f"{floor['id']} {cell} で{FACING_LABELS[facing]}を向いたときに表示する文字\n（空にすると削除）:",
+            initialvalue=current, parent=self)
+        if text is None:
+            return
+        text = text.strip()
+        if text == current:
+            return
+        if text:
+            self.expand_for_cell(cell)
+            floor["signs"][key] = text
+            self.status.set(f"{floor['id']} {cell} {FACING_LABELS[facing]}向きに看板「{text}」を設定しました。")
+        elif key in floor["signs"]:
+            del floor["signs"][key]
+            self.status.set(f"{floor['id']} {cell} {FACING_LABELS[facing]}向きの看板を削除しました。")
         self.mark_changed()
         self.canvas.redraw()
 
@@ -763,6 +811,13 @@ class MapEditor(tk.Tk):
             self.mark_changed()
             self.status.set("イベントを削除しました。")
             return
+        cell_signs = [key for key in floor["signs"] if key[:2] == (cell_x, cell_y)]
+        if cell_signs:
+            for key in cell_signs:
+                del floor["signs"][key]
+            self.mark_changed()
+            self.status.set(f"看板 {len(cell_signs)} 件を削除しました。")
+            return
         for index in range(len(self.stairs) - 1, -1, -1):
             stair = self.stairs[index]
             if any(end["floorId"] == floor["id"] and end["locate"] == [cell_x, cell_y]
@@ -830,8 +885,9 @@ class MapEditor(tk.Tk):
         out_spawn = bool(self.spawn and self.spawn["floorId"] == floor["id"]
                  and (self.spawn["locate"][0] >= width or self.spawn["locate"][1] >= height))
         out_events = [cell for cell in floor["events"] if cell[0] >= width or cell[1] >= height]
-        if (out_edges or out_stairs or out_spawn or out_events) and not messagebox.askyesno(
-            "範囲外データ", f"範囲外になる線分 {len(out_edges)} 本、階段 {len(out_stairs)} 件、イベント {len(out_events)} 件、開始地点 {'1件' if out_spawn else '0件'}を削除して変更しますか？",
+        out_signs = [key for key in floor["signs"] if key[0] >= width or key[1] >= height]
+        if (out_edges or out_stairs or out_spawn or out_events or out_signs) and not messagebox.askyesno(
+            "範囲外データ", f"範囲外になる線分 {len(out_edges)} 本、階段 {len(out_stairs)} 件、イベント {len(out_events)} 件、看板 {len(out_signs)} 件、開始地点 {'1件' if out_spawn else '0件'}を削除して変更しますか？",
                 parent=self):
             return
         for edge in out_edges:
@@ -843,6 +899,8 @@ class MapEditor(tk.Tk):
             self.spawn = None
         for cell in out_events:
             del floor["events"][cell]
+        for key in out_signs:
+            del floor["signs"][key]
         floor["width"], floor["height"] = width, height
         self._update_map_label()
         self.canvas.redraw()
@@ -962,6 +1020,23 @@ class MapEditor(tk.Tk):
                 if not 0 <= ex < width or not 0 <= ey < height:
                     raise ValueError(f"{label} がセル範囲外です。")
                 floor["events"][(ex, ey)] = event
+            raw_signs = raw_floor.get("signs", [])
+            if not isinstance(raw_signs, list):
+                raise ValueError(f"{floor_id}.signs は配列で指定してください。")
+            for sign_number, raw_sign in enumerate(raw_signs):
+                label = f"{floor_id}.signs[{sign_number}]"
+                if not isinstance(raw_sign, dict):
+                    raise ValueError(f"{label} はオブジェクトではありません。")
+                sx, sy = parse_coordinate(raw_sign.get("locate"), label)
+                if not 0 <= sx < width or not 0 <= sy < height:
+                    raise ValueError(f"{label} がセル範囲外です。")
+                facing = raw_sign.get("facing")
+                if facing not in FACINGS:
+                    raise ValueError(f"{label}.facing は N / E / S / W のいずれかで指定してください。")
+                text = raw_sign.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError(f"{label}.text に文字を指定してください。")
+                floor["signs"][(sx, sy, facing)] = text
             floors.append(floor)
 
         raw_stairs = document.get("stairs", [])
@@ -1042,6 +1117,10 @@ class MapEditor(tk.Tk):
                 "events": [{"locate": [x, y], **event} for (x, y), event in
                            sorted(floor["events"].items(), key=lambda item: (item[0][1], item[0][0]))],
             })
+            if floor["signs"]:
+                floors[-1]["signs"] = [
+                    {"locate": [x, y], "facing": facing, "text": text} for (x, y, facing), text in
+                    sorted(floor["signs"].items(), key=lambda item: (item[0][1], item[0][0], FACINGS.index(item[0][2])))]
         document = {
             "version": SCHEMA_VERSION,
             "floors": floors,
