@@ -612,6 +612,15 @@
         {
           "axis": "h",
           "locate": [
+            14,
+            25
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "h",
+          "locate": [
             16,
             25
           ],
@@ -621,11 +630,11 @@
         {
           "axis": "h",
           "locate": [
-            15,
+            14,
             26
           ],
           "type": "wall",
-          "length": 1
+          "length": 2
         },
         {
           "axis": "h",
@@ -1116,6 +1125,15 @@
         {
           "axis": "v",
           "locate": [
+            14,
+            25
+          ],
+          "type": "wall",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
             15,
             16
           ],
@@ -1256,6 +1274,80 @@
           ],
           "type": "wall",
           "length": 4
+        }
+      ],
+      "events": [
+        {
+          "locate": [
+            12,
+            11
+          ],
+          "type": "message",
+          "text": "Armor Shop\nLeather = 40 G.P.\nHauberk = 160 G.P.\nHalf Plate = 640 G.P.\nFull Plate = 2560 G.P.\nTabard = 10240 G.P.",
+          "once": false
+        },
+        {
+          "locate": [
+            14,
+            11
+          ],
+          "type": "message",
+          "text": "Weapon Shop\nKnife = 10 G.P.\nClub = 20 G.P.\nMace = 40 G.P.\nShort Sword = 80 G.P.\nAxe = 160 G.P.\nSpear = 320 G.P.\nBroad Sword = 640 G.P.\nClaymore = 1280 G.P.\nBattle Axe = 2560 G.P.",
+          "once": false
+        },
+        {
+          "locate": [
+            16,
+            11
+          ],
+          "type": "message",
+          "text": "Helmet Shop\nCoif = 40 G.P.\nWinged Helm = 320 G.P.\nHorned Helm = 2560 G.P.",
+          "once": false
+        },
+        {
+          "locate": [
+            12,
+            13
+          ],
+          "type": "message",
+          "text": "Shield Shop\nS-Shield = 30 G.P.\nM-Shield = 270 G.P.\nL-Shield = 2430 G.P.",
+          "once": false
+        },
+        {
+          "locate": [
+            2,
+            14
+          ],
+          "type": "message",
+          "text": "BANK",
+          "once": false
+        },
+        {
+          "locate": [
+            16,
+            16
+          ],
+          "type": "message",
+          "text": "Surgery",
+          "once": false
+        },
+        {
+          "locate": [
+            14,
+            17
+          ],
+          "type": "message",
+          "text": "Drugs",
+          "once": false
+        },
+        {
+          "locate": [
+            16,
+            17
+          ],
+          "type": "message",
+          "text": "Examinations",
+          "once": false
         }
       ]
     }
