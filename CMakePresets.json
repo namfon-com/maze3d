@@ -10,5 +10,19 @@
                 "VCPKG_TARGET_TRIPLET": "x64-windows"
             }
         }
+    ],
+    "buildPresets": [
+        {
+            "name": "release",
+            "displayName": "Release",
+            "configurePreset": "default",
+            "configuration": "Release"
+        },
+        {
+            "name": "debug",
+            "displayName": "Debug",
+            "configurePreset": "default",
+            "configuration": "Debug"
+        }
     ]
 }
