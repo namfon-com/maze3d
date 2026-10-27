@@ -9,6 +9,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -21,12 +22,14 @@ namespace fs = std::filesystem;
 struct StairEnd { std::string floorId; int x = 0; int y = 0; };
 struct Stair { std::string id; StairEnd ends[2]; };
 // セルに置くイベント。type: "message"（メッセージ表示）/ "treasure"（宝箱: 1回だけ gold / item を入手）
+// / "recruit"（人間に出会う: character の人物を仲間に誘える）
 struct MapEvent {
     std::string type;
     std::string text;
     bool once = false;
     int gold = 0;
     std::string item;
+    std::string character;
 };
 struct Floor {
     std::string id;
@@ -81,12 +84,13 @@ MapData loadMap(const fs::path& path) {
         for (const auto& evj : fj.value("events", json::array())) {
             MapEvent event;
             event.type = evj.at("type").get<std::string>();
-            if (event.type != "message" && event.type != "treasure")
+            if (event.type != "message" && event.type != "treasure" && event.type != "recruit")
                 throw std::runtime_error("Unknown event type: " + event.type);
             event.text = evj.value("text", "");
             event.once = evj.value("once", false);
             event.gold = evj.value("gold", 0);
             event.item = evj.value("item", "");
+            event.character = evj.value("character", "");
             int x = evj.at("locate").at(0).get<int>();
             int y = evj.at("locate").at(1).get<int>();
             floor.events[edgeKey(x, y)] = event;
@@ -117,6 +121,53 @@ MapData loadMap(const fs::path& path) {
         map.spawn.floorId = map.floors.front().id;
     }
     return map;
+}
+
+// キャラクター定義（assets/data/characters.json）。主人公も仲間候補も同じ形式
+struct Character {
+    std::string id;
+    std::string name;
+    std::string portrait;  // assets/portraits/ 内のファイル名（64x64 推奨）
+    int level = 1;
+    int exp = 0;
+    int hp = 1;
+    int maxHp = 1;
+    int str = 1;  // ちから: 攻撃力
+    int vit = 1;  // たいりょく: 防御・最大HP
+    int agi = 1;  // すばやさ: 行動順・回避・逃走
+    int gold = 0; // 所持金は各人が持つ（Black Onyx 風）
+};
+
+struct CharacterDatabase {
+    std::string heroId;
+    std::unordered_map<std::string, Character> characters;
+};
+
+CharacterDatabase loadCharacters(const fs::path& path) {
+    std::ifstream in(path);
+    if (!in) throw std::runtime_error("Cannot open: " + path.string());
+    json document;
+    in >> document;
+    CharacterDatabase database;
+    database.heroId = document.at("hero").get<std::string>();
+    for (const auto& cj : document.at("characters")) {
+        Character character;
+        character.id = cj.at("id").get<std::string>();
+        character.name = cj.at("name").get<std::string>();
+        character.portrait = cj.value("portrait", "");
+        character.level = cj.value("level", 1);
+        character.exp = cj.value("exp", 0);
+        character.maxHp = cj.at("hp").get<int>();
+        character.hp = character.maxHp;
+        character.str = cj.at("str").get<int>();
+        character.vit = cj.at("vit").get<int>();
+        character.agi = cj.at("agi").get<int>();
+        character.gold = cj.value("gold", 0);
+        database.characters[character.id] = character;
+    }
+    if (!database.characters.count(database.heroId))
+        throw std::runtime_error("characters.json: hero '" + database.heroId + "' is not defined");
+    return database;
 }
 
 struct TextureAsset {
@@ -456,6 +507,9 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
         if (event.type == "treasure") {
             if (done) SDL_SetRenderDrawColor(renderer, 90, 70, 50, 255);
             else SDL_SetRenderDrawColor(renderer, 201, 139, 60, 255);
+        } else if (event.type == "recruit") {
+            if (done) continue;  // 仲間になった人物はもういない
+            SDL_SetRenderDrawColor(renderer, 110, 210, 120, 255);
         } else {
             if (done) SDL_SetRenderDrawColor(renderer, 60, 80, 110, 255);
             else SDL_SetRenderDrawColor(renderer, 120, 180, 255, 255);
@@ -544,8 +598,14 @@ constexpr int kTextScale = 2;
 constexpr int kMessageLines = 4;
 constexpr double kMessageScrollDuration = 0.18;  // 1ページ分のスクロール時間（秒）
 
+struct Message {
+    std::string text;
+    std::string portrait;                 // 顔を出すキャラクターID（空なら顔なし）
+    std::function<void(bool)> onChoice;   // 設定時は最後のページで「はい／いいえ」を選ばせる
+};
+
 struct MessageWindow {
-    std::deque<std::string> queue;
+    std::deque<Message> queue;
     SDL_Texture* texture = nullptr;  // queue.front() の描画キャッシュ
     int textWidth = 0;
     int textHeight = 0;
@@ -557,15 +617,24 @@ struct MessageWindow {
     bool open() const { return !queue.empty(); }
     int totalLines() const { return lineSkip > 0 ? (textHeight + lineSkip - 1) / lineSkip : 0; }
     bool hasMorePages() const { return topLine + kMessageLines < totalLines(); }
-    void push(const std::string& text) { queue.push_back(text); }
+    bool choiceYes = true;
+
+    void push(const std::string& text) { queue.push_back({text, "", nullptr}); }
+    void push(Message message) { queue.push_back(std::move(message)); }
+    bool choosing() const { return open() && queue.front().onChoice && texture && !hasMorePages(); }
     void advance() {
         if (queue.empty()) return;
         if (texture && hasMorePages()) {
             topLine += kMessageLines;
             return;
         }
+        // コールバックが新しいメッセージを積めるよう、先に取り出してから呼ぶ
+        std::function<void(bool)> callback = queue.front().onChoice;
+        bool answer = choiceYes;
         queue.pop_front();
         release();
+        choiceYes = true;
+        if (callback) callback(answer);
     }
     void release() {
         if (texture) SDL_DestroyTexture(texture);
@@ -617,23 +686,39 @@ SDL_Texture* renderText(SDL_Renderer* renderer, TTF_Font* font, const std::strin
     return texture;
 }
 
-void drawMessageWindow(SDL_Renderer* renderer, TTF_Font* font, MessageWindow& window, Uint32 ticks) {
-    if (!window.open()) return;
-    const int padding = 22;
-    window.lineSkip = std::max(1, TTF_FontLineSkip(font));
-    const int textAreaHeight = kMessageLines * window.lineSkip * kTextScale;
-    const int frameHeight = textAreaHeight + padding * 2;
-    const SDL_Rect frame{24, kViewHeight - 24 - frameHeight, kViewWidth - 48, frameHeight};
-    if (!window.texture) {
-        int wrap = (frame.w - padding * 2) / kTextScale - kFontPixel;  // ぶら下げ1文字分の余白を残す
-        window.texture = renderText(renderer, font, window.queue.front(), wrap, window.textWidth, window.textHeight);
+// 1行テキストの描画キャッシュ（パーティ欄や選択肢など、毎フレーム描く短い文字列用）
+struct TextCache {
+    struct Entry {
+        SDL_Texture* texture = nullptr;
+        int width = 0;
+        int height = 0;
+    };
+    std::unordered_map<std::string, Entry> entries;
+
+    const Entry& get(SDL_Renderer* renderer, TTF_Font* font, const std::string& text) {
+        auto found = entries.find(text);
+        if (found != entries.end()) return found->second;
+        if (entries.size() > 512) clear();
+        Entry entry;
+        entry.texture = renderText(renderer, font, text, 1 << 20, entry.width, entry.height);
+        return entries.emplace(text, entry).first->second;
     }
-    // スクロール位置を目標ページへ近づける
-    double elapsed = window.lastTicks ? (ticks - window.lastTicks) / 1000.0 : 0.0;
-    window.lastTicks = ticks;
-    double targetY = window.topLine * window.lineSkip;
-    double step = kMessageLines * window.lineSkip / kMessageScrollDuration * std::min(elapsed, 0.05);
-    window.scrollY = window.scrollY < targetY ? std::min(targetY, window.scrollY + step) : targetY;
+    void clear() {
+        for (auto& [text, entry] : entries) if (entry.texture) SDL_DestroyTexture(entry.texture);
+        entries.clear();
+    }
+};
+
+void drawText(SDL_Renderer* renderer, TTF_Font* font, TextCache& cache, const std::string& text,
+              int x, int y, SDL_Color color = {235, 235, 225, 255}) {
+    const TextCache::Entry& entry = cache.get(renderer, font, text);
+    if (!entry.texture) return;
+    SDL_SetTextureColorMod(entry.texture, color.r, color.g, color.b);
+    SDL_Rect destination{x, y, entry.width * kTextScale, entry.height * kTextScale};
+    SDL_RenderCopy(renderer, entry.texture, nullptr, &destination);
+}
+
+void drawFrame(SDL_Renderer* renderer, const SDL_Rect& frame) {
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 225);
     SDL_RenderFillRect(renderer, &frame);
@@ -646,24 +731,164 @@ void drawMessageWindow(SDL_Renderer* renderer, TTF_Font* font, MessageWindow& wi
     }
     SDL_Rect inner{frame.x + 7, frame.y + 7, frame.w - 14, frame.h - 14};
     SDL_RenderDrawRect(renderer, &inner);
+}
+
+// 顔グラフィック。assets/portraits/ の画像を使い、無ければ人物シルエットを描く
+constexpr int kPortraitSize = 64;
+
+struct PortraitCache {
+    fs::path directory;
+    std::unordered_map<std::string, TextureAsset> textures;
+
+    void draw(SDL_Renderer* renderer, const Character& character, const SDL_Rect& destination) {
+        auto found = textures.find(character.id);
+        if (found == textures.end()) {
+            TextureAsset asset;
+            if (!character.portrait.empty()) asset = loadTexture(renderer, directory / character.portrait);
+            found = textures.emplace(character.id, asset).first;
+        }
+        if (found->second.texture) {
+            SDL_RenderCopy(renderer, found->second.texture, nullptr, &destination);
+            return;
+        }
+        // 仮の顔: ID から決めた色の背景に、頭と肩のシルエット
+        std::size_t hash = std::hash<std::string>{}(character.id);
+        SDL_SetRenderDrawColor(renderer, 40 + hash % 60, 40 + (hash >> 8) % 60, 50 + (hash >> 16) % 70, 255);
+        SDL_RenderFillRect(renderer, &destination);
+        SDL_SetRenderDrawColor(renderer, 12, 12, 16, 255);
+        double unit = destination.w / 64.0;
+        int centerX = destination.x + destination.w / 2;
+        for (int row = 0; row < destination.h; ++row) {
+            double y = row / unit;
+            double half = 0;
+            if (y >= 12 && y <= 36) half = std::sqrt(std::max(0.0, 144.0 - (y - 24) * (y - 24)));  // 頭
+            if (y >= 40) half = std::min(28.0, 14.0 + (y - 40) * 1.2);                             // 肩
+            if (half <= 0) continue;
+            SDL_RenderDrawLine(renderer, centerX - static_cast<int>(half * unit), destination.y + row,
+                               centerX + static_cast<int>(half * unit), destination.y + row);
+        }
+    }
+    void release() {
+        for (auto& [id, asset] : textures) if (asset.texture) SDL_DestroyTexture(asset.texture);
+        textures.clear();
+    }
+};
+
+void drawMessageWindow(SDL_Renderer* renderer, TTF_Font* font, TextCache& cache, PortraitCache& portraits,
+                       const std::unordered_map<std::string, Character>& characters,
+                       MessageWindow& window, Uint32 ticks) {
+    if (!window.open()) return;
+    const int padding = 22;
+    window.lineSkip = std::max(1, TTF_FontLineSkip(font));
+    const Message& message = window.queue.front();
+    auto speaker = characters.find(message.portrait);
+    const bool hasPortrait = speaker != characters.end();
+    const int portraitSize = kPortraitSize * kTextScale;
+    const int textAreaHeight = kMessageLines * window.lineSkip * kTextScale;
+    const int frameHeight = std::max(textAreaHeight, hasPortrait ? portraitSize : 0) + padding * 2;
+    const SDL_Rect frame{24, kViewHeight - 24 - frameHeight, kViewWidth - 48, frameHeight};
+    const int textX = frame.x + padding + (hasPortrait ? portraitSize + 20 : 0);
+    const int textWidth = frame.x + frame.w - padding - textX;
+    if (!window.texture) {
+        int wrap = textWidth / kTextScale - kFontPixel;  // ぶら下げ1文字分の余白を残す
+        window.texture = renderText(renderer, font, message.text, wrap, window.textWidth, window.textHeight);
+    }
+    // スクロール位置を目標ページへ近づける
+    double elapsed = window.lastTicks ? (ticks - window.lastTicks) / 1000.0 : 0.0;
+    window.lastTicks = ticks;
+    double targetY = window.topLine * window.lineSkip;
+    double step = kMessageLines * window.lineSkip / kMessageScrollDuration * std::min(elapsed, 0.05);
+    window.scrollY = window.scrollY < targetY ? std::min(targetY, window.scrollY + step) : targetY;
+    drawFrame(renderer, frame);
+    if (hasPortrait) {
+        SDL_Rect face{frame.x + padding, frame.y + padding, portraitSize, portraitSize};
+        portraits.draw(renderer, speaker->second, face);
+    }
 
     if (window.texture) {
-        SDL_Rect clip{frame.x + padding, frame.y + padding, frame.w - padding * 2, textAreaHeight};
+        SDL_Rect clip{textX, frame.y + padding, textWidth, textAreaHeight};
         SDL_RenderSetClipRect(renderer, &clip);
-        SDL_Rect destination{frame.x + padding,
+        SDL_Rect destination{textX,
                              frame.y + padding - static_cast<int>(window.scrollY) * kTextScale,
                              window.textWidth * kTextScale, window.textHeight * kTextScale};
         SDL_RenderCopy(renderer, window.texture, nullptr, &destination);
         SDL_RenderSetClipRect(renderer, nullptr);
     }
-    // 送り待ちの点滅カーソル（スクロール中は出さない）
     bool scrolling = window.scrollY < window.topLine * window.lineSkip;
+    // はい／いいえ の選択肢（メッセージ枠の右上に小窓を出す）
+    if (window.choosing() && !scrolling) {
+        const int lineHeight = window.lineSkip * kTextScale;
+        SDL_Rect box{frame.x + frame.w - 200, frame.y - lineHeight * 2 - 44, 200, lineHeight * 2 + 40};
+        drawFrame(renderer, box);
+        const char* labels[] = {"はい", "いいえ"};
+        for (int i = 0; i < 2; ++i) {
+            int y = box.y + 20 + i * lineHeight;
+            bool selected = (i == 0) == window.choiceYes;
+            if (selected) {  // カーソル（右向き三角）
+                SDL_SetRenderDrawColor(renderer, 255, 230, 120, 255);
+                for (int col = 0; col < 9; ++col)
+                    SDL_RenderDrawLine(renderer, box.x + 22 + col, y + 4 + col, box.x + 22 + col, y + 20 - col);
+            }
+            drawText(renderer, font, cache, labels[i], box.x + 22 + kFontPixel * kTextScale + 6, y,
+                     selected ? SDL_Color{255, 230, 120, 255} : SDL_Color{235, 235, 225, 255});
+        }
+        return;  // 選択中は送りカーソルを出さない
+    }
+    // 送り待ちの点滅カーソル（スクロール中は出さない）
     if (!scrolling && (ticks / 400) % 2 == 0) {
         int cx = frame.x + frame.w - padding - 8;
         int cy = frame.y + frame.h - padding - 6;
         for (int row = 0; row < 7; ++row) {
             SDL_RenderDrawLine(renderer, cx - 7 + row, cy + row, cx + 7 - row, cy + row);
         }
+    }
+}
+
+// 3D画面の右に並べるパーティ欄（最大 kMaxParty 人）
+constexpr int kPanelWidth = 240;
+constexpr int kMaxParty = 5;
+
+void drawPartyPanel(SDL_Renderer* renderer, TTF_Font* font, TextCache& cache, PortraitCache& portraits,
+                    const std::vector<Character>& party) {
+    SDL_Rect panel{kViewWidth, 0, kPanelWidth, kViewHeight};
+    SDL_SetRenderDrawColor(renderer, 10, 10, 14, 255);
+    SDL_RenderFillRect(renderer, &panel);
+    const int rowHeight = kViewHeight / kMaxParty;
+    for (int i = 0; i < kMaxParty; ++i) {
+        SDL_Rect row{panel.x + 4, i * rowHeight + 4, panel.w - 8, rowHeight - 8};
+        SDL_SetRenderDrawColor(renderer, 90, 90, 84, 255);
+        SDL_RenderDrawRect(renderer, &row);
+        if (i >= static_cast<int>(party.size())) {
+            drawText(renderer, font, cache, "---", row.x + row.w / 2 - kFontPixel, row.y + row.h / 2 - kFontPixel,
+                     SDL_Color{80, 80, 76, 255});
+            continue;
+        }
+        const Character& member = party[i];
+        SDL_Rect face{row.x + 8, row.y + 8, kPortraitSize, kPortraitSize};
+        portraits.draw(renderer, member, face);
+        SDL_SetRenderDrawColor(renderer, 160, 160, 150, 255);
+        SDL_RenderDrawRect(renderer, &face);
+
+        // HPバー（顔の下）
+        double ratio = member.maxHp > 0 ? std::clamp(static_cast<double>(member.hp) / member.maxHp, 0.0, 1.0) : 0.0;
+        SDL_Color hpColor = ratio > 0.5 ? SDL_Color{120, 220, 120, 255}
+                          : ratio > 0.25 ? SDL_Color{240, 210, 80, 255} : SDL_Color{240, 90, 80, 255};
+        SDL_Rect barBack{face.x, face.y + face.h + 8, face.w, 8};
+        SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+        SDL_RenderFillRect(renderer, &barBack);
+        SDL_Rect bar{barBack.x, barBack.y, static_cast<int>(barBack.w * ratio), barBack.h};
+        SDL_SetRenderDrawColor(renderer, hpColor.r, hpColor.g, hpColor.b, 255);
+        SDL_RenderFillRect(renderer, &bar);
+
+        const int textX = face.x + face.w + 10;
+        const int line = kFontPixel * kTextScale + 2;
+        drawText(renderer, font, cache, member.name, textX, row.y + 6);
+        drawText(renderer, font, cache, "LV " + std::to_string(member.level), textX, row.y + 6 + line,
+                 SDL_Color{180, 180, 170, 255});
+        drawText(renderer, font, cache, "HP " + std::to_string(member.hp) + "/" + std::to_string(member.maxHp),
+                 textX, row.y + 6 + line * 2, hpColor);
+        drawText(renderer, font, cache, "G  " + std::to_string(member.gold), textX, row.y + 6 + line * 3,
+                 SDL_Color{240, 200, 90, 255});
     }
 }
 
@@ -697,12 +922,17 @@ struct Motion {
     bool moved = false;  // 1マス移動（到着時にイベント判定する）
 };
 
-// プレイヤーの所持品とイベント消化状況
+// パーティ・所持品とイベント消化状況
 struct GameState {
-    int gold = 0;
-    std::vector<std::string> items;
-    std::unordered_set<std::string> doneEvents;  // eventId(): once メッセージ表示済み / 宝箱開封済み
+    std::vector<Character> party;                // 先頭がリーダー（主人公）
+    std::vector<std::string> items;              // アイテムは当面パーティ共有
+    std::unordered_set<std::string> doneEvents;  // eventId(): once メッセージ表示済み / 宝箱開封済み / 勧誘済み
 };
+
+fs::path findAssetPath(const fs::path& exeDir, const fs::path& relative) {
+    fs::path candidate = exeDir / "assets" / relative;
+    return fs::exists(candidate) ? candidate : fs::path("assets") / relative;
+}
 
 double smoothstep(double t) { return t * t * (3.0 - 2.0 * t); }
 
@@ -721,14 +951,15 @@ int main(int argc, char* argv[]) {
         const int windowGap = 12;
         SDL_Rect display{0, 0, 1280, 720};
         SDL_GetDisplayUsableBounds(0, &display);
-        int mainX = display.x + std::max(0, (display.w - (kViewWidth + windowGap + previewWidth)) / 2);
+        const int mainWidth = kViewWidth + kPanelWidth;
+        int mainX = display.x + std::max(0, (display.w - (mainWidth + windowGap + previewWidth)) / 2);
         int mainY = display.y + std::max(0, (display.h - kViewHeight) / 2);
-        SDL_Window* window = SDL_CreateWindow("maze3d", mainX, mainY, kViewWidth, kViewHeight, SDL_WINDOW_SHOWN);
+        SDL_Window* window = SDL_CreateWindow("maze3d", mainX, mainY, mainWidth, kViewHeight, SDL_WINDOW_SHOWN);
         if (!window) throw std::runtime_error(SDL_GetError());
         SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
         if (!renderer) throw std::runtime_error(SDL_GetError());
 
-        SDL_Window* previewWindow = SDL_CreateWindow("map preview - current position", mainX + kViewWidth + windowGap, mainY,
+        SDL_Window* previewWindow = SDL_CreateWindow("map preview - current position", mainX + mainWidth + windowGap, mainY,
                                                      previewWidth, previewHeight, SDL_WINDOW_SHOWN);
         if (!previewWindow) throw std::runtime_error(SDL_GetError());
         SDL_Renderer* previewRenderer = SDL_CreateRenderer(previewWindow, -1, SDL_RENDERER_ACCELERATED);
@@ -770,7 +1001,19 @@ int main(int argc, char* argv[]) {
         TTF_Font* font = TTF_OpenFont(fontPath.string().c_str(), kFontPixel);
         if (!font) throw std::runtime_error(std::string("Cannot load font: ") + TTF_GetError());
 
+        CharacterDatabase database = loadCharacters(findAssetPath(exeDir, "data/characters.json"));
+        for (const Floor& floor : map.floors) {
+            for (const auto& [key, event] : floor.events) {
+                if (event.type == "recruit" && !database.characters.count(event.character))
+                    throw std::runtime_error("Recruit event refers to unknown character: " + event.character);
+            }
+        }
+        PortraitCache portraits;
+        portraits.directory = findAssetPath(exeDir, "portraits");
+        TextCache textCache;
+
         GameState state;
+        state.party.push_back(database.characters.at(database.heroId));
         MessageWindow messages;
 
         auto triggerEvent = [&]() {
@@ -791,8 +1034,9 @@ int main(int argc, char* argv[]) {
                 std::string text = event.text.empty() ? "" : event.text + "\n";
                 text += "宝箱を開けた！";
                 if (event.gold > 0) {
-                    state.gold += event.gold;
-                    text += "\n" + std::to_string(event.gold) + " ゴールドを手に入れた。";
+                    Character& leader = state.party.front();  // 拾ったお金はリーダーの所持金になる
+                    leader.gold += event.gold;
+                    text += "\n" + leader.name + " は " + std::to_string(event.gold) + " ゴールドを手に入れた。";
                 }
                 if (!event.item.empty()) {
                     state.items.push_back(event.item);
@@ -800,6 +1044,29 @@ int main(int argc, char* argv[]) {
                 }
                 messages.push(text);
                 state.doneEvents.insert(id);
+            } else if (event.type == "recruit") {
+                if (done) return;
+                const Character& candidate = database.characters.at(event.character);
+                bool alreadyMember = std::any_of(state.party.begin(), state.party.end(),
+                                                 [&](const Character& member) { return member.id == candidate.id; });
+                if (alreadyMember) return;
+                std::string text = event.text.empty()
+                    ? candidate.name + " がいる。\n「冒険の仲間を探しているのか？」"
+                    : event.text;
+                text += "\n" + candidate.name + " を仲間に誘いますか？";
+                messages.push(Message{text, candidate.id, [&state, &messages, candidate, id](bool yes) {
+                    if (!yes) {
+                        messages.push(Message{"「そうか。気が変わったら声をかけてくれ。」", candidate.id, nullptr});
+                        return;
+                    }
+                    if (static_cast<int>(state.party.size()) >= kMaxParty) {
+                        messages.push("これ以上は仲間にできない。");
+                        return;
+                    }
+                    state.party.push_back(candidate);
+                    state.doneEvents.insert(id);
+                    messages.push(candidate.name + " が仲間に加わった！");
+                }});
             }
         };
 
@@ -850,9 +1117,17 @@ int main(int argc, char* argv[]) {
                     SDL_Scancode key = event.key.keysym.scancode;
                     if (key == SDL_SCANCODE_Q || key == SDL_SCANCODE_ESCAPE) running = false;
                     if (messages.open()) {
-                        // メッセージ表示中は送り操作のみ受け付ける
-                        if (key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER || key == SDL_SCANCODE_SPACE || key == SDL_SCANCODE_Z)
-                            messages.advance();
+                        // メッセージ表示中は送り操作（選択肢があれば上下で選択、X/Backspace で「いいえ」）のみ受け付ける
+                        bool confirm = key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER
+                                    || key == SDL_SCANCODE_SPACE || key == SDL_SCANCODE_Z;
+                        if (messages.choosing()) {
+                            if (actionForKey(key) != Action::None) messages.choiceYes = !messages.choiceYes;
+                            if (key == SDL_SCANCODE_X || key == SDL_SCANCODE_BACKSPACE) {
+                                messages.choiceYes = false;
+                                confirm = true;
+                            }
+                        }
+                        if (confirm) messages.advance();
                         continue;
                     }
                     Action action = actionForKey(key);
@@ -903,12 +1178,15 @@ int main(int argc, char* argv[]) {
             }
 
             drawPseudo3D(renderer, *currentFloor, wallTexture, doorTexture, viewX, viewY, viewAngle);
-            drawMessageWindow(renderer, font, messages, currentTime);
+            drawPartyPanel(renderer, font, textCache, portraits, state.party);
+            drawMessageWindow(renderer, font, textCache, portraits, database.characters, messages, currentTime);
             SDL_RenderPresent(renderer);
             drawMapPreview(previewRenderer, *currentFloor, map, state.doneEvents, viewX, viewY, viewAngle);
         }
 
         messages.release();
+        textCache.clear();
+        portraits.release();
         TTF_CloseFont(font);
         TTF_Quit();
 

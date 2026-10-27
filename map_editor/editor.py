@@ -20,7 +20,20 @@ FACINGS = ["N", "E", "S", "W"]
 FACING_VECTORS = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}
 FACING_LABELS = {"N": "北", "E": "東", "S": "南", "W": "西"}
 # イベントマスの種類
-EVENT_TYPES = {"message": "メッセージ", "treasure": "宝箱"}
+EVENT_TYPES = {"message": "メッセージ", "treasure": "宝箱", "recruit": "人間（勧誘）"}
+# ゲーム本体と共有するキャラクター定義（勧誘イベントの人物リストに使う）
+CHARACTERS_PATH = Path(__file__).resolve().parent.parent / "assets" / "data" / "characters.json"
+
+
+def load_character_choices() -> list[tuple[str, str]]:
+    """characters.json から (id, 名前) の一覧を返す。主人公は除く。読めなければ空。"""
+    try:
+        document = json.loads(CHARACTERS_PATH.read_text(encoding="utf-8"))
+        hero = document.get("hero")
+        return [(c["id"], c.get("name", c["id"])) for c in document.get("characters", [])
+                if isinstance(c, dict) and "id" in c and c["id"] != hero]
+    except (OSError, ValueError, TypeError, KeyError):
+        return []
 
 
 def validate_size(value: Any, label: str) -> int:
@@ -54,6 +67,11 @@ def parse_event(raw: Any, label: str) -> dict[str, Any]:
         if not isinstance(once, bool):
             raise ValueError(f"{label}.once は true / false で指定してください。")
         event["once"] = once
+    elif kind == "recruit":
+        character = raw.get("character")
+        if not isinstance(character, str) or not character:
+            raise ValueError(f"{label}.character にキャラクターIDを指定してください。")
+        event["character"] = character
     else:
         gold = raw.get("gold", 0)
         item = raw.get("item", "")
@@ -267,7 +285,11 @@ class MapCanvas(tk.Canvas):
             x1 = left + event_x * CELL_SIZE + 6
             y1 = top + event_y * CELL_SIZE + 6
             x2, y2 = x1 + CELL_SIZE - 12, y1 + CELL_SIZE - 12
-            if event["type"] == "treasure":
+            if event["type"] == "recruit":
+                self.create_rectangle(x1, y1, x2, y2, fill="#c9f0cc", outline="#2e7d32", width=2)
+                self.create_text((x1 + x2) / 2, (y1 + y2) / 2, text="人", fill="#1b5e20",
+                                 font=("Segoe UI", 12, "bold"))
+            elif event["type"] == "treasure":
                 self.create_rectangle(x1, y1 + 6, x2, y2, fill="#c98b3c", outline="#5c3a12", width=2)
                 self.create_line(x1, y1 + 16, x2, y1 + 16, fill="#5c3a12", width=2)
                 self.create_text((x1 + x2) / 2, y1 + 24, text="宝", fill="#2b1a06", font=("Segoe UI", 9, "bold"))
@@ -333,6 +355,8 @@ class EventDialog(tk.Toplevel):
         self.once = tk.BooleanVar(value=event.get("once", False))
         self.gold = tk.StringVar(value=str(event.get("gold", 0)))
         self.item = tk.StringVar(value=event.get("item", ""))
+        self.characters = load_character_choices()
+        self.character = tk.StringVar(value=self._character_label(event.get("character", "")))
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill=tk.BOTH, expand=True)
@@ -355,9 +379,15 @@ class EventDialog(tk.Toplevel):
         self.item_entry.grid(row=5, column=1, sticky="w", pady=(4, 0))
         ttk.Label(body, text="宝箱は一度開けると空になります。", foreground="#687078").grid(
             row=6, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(body, text="人物:").grid(row=7, column=0, sticky="w", pady=(8, 0))
+        self.character_combo = ttk.Combobox(body, textvariable=self.character, width=22,
+                                            values=[self._character_label(cid) for cid, _ in self.characters])
+        self.character_combo.grid(row=7, column=1, sticky="w", pady=(8, 0))
+        ttk.Label(body, text="人物は assets/data/characters.json で定義します。\n文章を空にすると既定のセリフになります。",
+                  foreground="#687078", justify=tk.LEFT).grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        buttons.grid(row=9, column=0, columnspan=2, sticky="e", pady=(12, 0))
         if existing:
             ttk.Button(buttons, text="削除", command=self._delete).pack(side=tk.LEFT, padx=(0, 16))
         ttk.Button(buttons, text="OK", command=self._ok).pack(side=tk.LEFT)
@@ -370,11 +400,19 @@ class EventDialog(tk.Toplevel):
         self.grab_set()
         self.wait_window(self)
 
+    def _character_label(self, character_id: str) -> str:
+        for cid, name in self.characters:
+            if cid == character_id:
+                return f"{cid}: {name}"
+        return character_id
+
     def _update_state(self) -> None:
-        treasure = self.kind.get() == "treasure"
-        self.once_check.configure(state=tk.DISABLED if treasure else tk.NORMAL)
-        self.gold_entry.configure(state=tk.NORMAL if treasure else tk.DISABLED)
-        self.item_entry.configure(state=tk.NORMAL if treasure else tk.DISABLED)
+        kind = self.kind.get()
+        self.once_check.configure(state=tk.NORMAL if kind == "message" else tk.DISABLED)
+        self.gold_entry.configure(state=tk.NORMAL if kind == "treasure" else tk.DISABLED)
+        self.item_entry.configure(state=tk.NORMAL if kind == "treasure" else tk.DISABLED)
+        self.character_combo.configure(state="readonly" if kind == "recruit" and self.characters
+                                       else tk.NORMAL if kind == "recruit" else tk.DISABLED)
 
     def _ok(self) -> None:
         text = self.text.get("1.0", "end-1c").rstrip()
@@ -383,6 +421,12 @@ class EventDialog(tk.Toplevel):
                 messagebox.showerror("入力エラー", "メッセージを入力してください。", parent=self)
                 return
             self.result = {"type": "message", "text": text, "once": self.once.get()}
+        elif self.kind.get() == "recruit":
+            character = self.character.get().split(":", 1)[0].strip()
+            if not character:
+                messagebox.showerror("入力エラー", "仲間にする人物を選んでください。", parent=self)
+                return
+            self.result = {"type": "recruit", "text": text, "character": character}
         else:
             try:
                 gold = int(self.gold.get() or 0)
@@ -525,7 +569,7 @@ class MapEditor(tk.Tk):
             ("erase", "消去"),
             ("stair", "階段（両端を指定）"),
             ("spawn", "ゲーム開始地点"),
-            ("event", "イベント（メッセージ／宝箱）"),
+            ("event", "イベント（メッセージ／宝箱／人間）"),
         ]
         for value, text in tools:
             ttk.Radiobutton(sidebar, text=text, value=value, variable=self.tool,
@@ -534,7 +578,7 @@ class MapEditor(tk.Tk):
         ttk.Separator(sidebar).pack(fill=tk.X, pady=10)
         ttk.Label(sidebar, text="凡例", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
         ttk.Label(sidebar, text="■ 壁  ■ ドア  ● 階段  ● P 開始  ! イベント", foreground="#495057").pack(anchor=tk.W, pady=4)
-        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベントはセルをクリックして編集。\n\n点線の外側も描画できます。",
+        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間）は\nセルをクリックして編集。\n\n点線の外側も描画できます。",
                   justify=tk.LEFT, wraplength=220).pack(anchor=tk.W, pady=(6, 0))
 
         area = ttk.Frame(outer)

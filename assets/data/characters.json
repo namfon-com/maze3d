@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hero": "hero",
+  "characters": [
+    { "id": "hero",  "name": "主人公", "portrait": "hero.png",  "level": 1, "hp": 30, "str": 8,  "vit": 7, "agi": 6,  "gold": 50 },
+    { "id": "garde", "name": "ガルド", "portrait": "garde.png", "level": 2, "hp": 38, "str": 11, "vit": 9, "agi": 4,  "gold": 120 },
+    { "id": "rina",  "name": "リナ",   "portrait": "rina.png",  "level": 1, "hp": 24, "str": 6,  "vit": 5, "agi": 11, "gold": 30 },
+    { "id": "borg",  "name": "ボルグ", "portrait": "borg.png",  "level": 3, "hp": 45, "str": 10, "vit": 12, "agi": 3, "gold": 210 }
+  ]
+}
