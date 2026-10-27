@@ -715,20 +715,30 @@ int main(int argc, char* argv[]) {
             throw std::runtime_error(IMG_GetError());
         if (TTF_Init() != 0) throw std::runtime_error(TTF_GetError());
 
-        SDL_Window* window = SDL_CreateWindow("maze3d", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                               kViewWidth, kViewHeight, SDL_WINDOW_SHOWN);
+        // メイン画面とマッププレビューを横に並べ、2枚まとめて画面中央に配置する
+        const int previewWidth = 420;
+        const int previewHeight = 450;
+        const int windowGap = 12;
+        SDL_Rect display{0, 0, 1280, 720};
+        SDL_GetDisplayUsableBounds(0, &display);
+        int mainX = display.x + std::max(0, (display.w - (kViewWidth + windowGap + previewWidth)) / 2);
+        int mainY = display.y + std::max(0, (display.h - kViewHeight) / 2);
+        SDL_Window* window = SDL_CreateWindow("maze3d", mainX, mainY, kViewWidth, kViewHeight, SDL_WINDOW_SHOWN);
         if (!window) throw std::runtime_error(SDL_GetError());
         SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
         if (!renderer) throw std::runtime_error(SDL_GetError());
 
-        SDL_Window* previewWindow = SDL_CreateWindow("map preview - current position", SDL_WINDOWPOS_UNDEFINED,
-                                                     SDL_WINDOWPOS_UNDEFINED, 420, 450, SDL_WINDOW_SHOWN);
+        SDL_Window* previewWindow = SDL_CreateWindow("map preview - current position", mainX + kViewWidth + windowGap, mainY,
+                                                     previewWidth, previewHeight, SDL_WINDOW_SHOWN);
         if (!previewWindow) throw std::runtime_error(SDL_GetError());
         SDL_Renderer* previewRenderer = SDL_CreateRenderer(previewWindow, -1, SDL_RENDERER_ACCELERATED);
         if (!previewRenderer) {
             SDL_DestroyWindow(previewWindow);
             throw std::runtime_error(SDL_GetError());
         }
+        // 起動時に両ウィンドウを最前面へ。キーボード入力を受けるメイン画面を最後に前面化する
+        SDL_SetHint(SDL_HINT_FORCE_RAISEWINDOW, "1");
+        SDL_RaiseWindow(previewWindow);
         SDL_RaiseWindow(window);
 
         std::string currentFloorId = map.spawn.floorId;
