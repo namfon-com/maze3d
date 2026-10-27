@@ -537,33 +537,78 @@ fs::path findMapPath(int argc, char* argv[], const fs::path& exeDir) {
     return candidates[0];
 }
 
-// 画面下部のメッセージウィンドウ。キューの先頭を表示し、決定キーで次へ進む
+// 画面下部のメッセージウィンドウ。キューの先頭を表示し、決定キーで次へ進む。
+// ウィンドウに収まらない文章は kMessageLines 行ずつ送り、送るたびに上へスクロールさせる
 constexpr int kFontPixel = 12;  // PixelMplus12 の設計サイズ。整数倍で拡大してドットをくっきり保つ
 constexpr int kTextScale = 2;
+constexpr int kMessageLines = 4;
+constexpr double kMessageScrollDuration = 0.18;  // 1ページ分のスクロール時間（秒）
 
 struct MessageWindow {
     std::deque<std::string> queue;
     SDL_Texture* texture = nullptr;  // queue.front() の描画キャッシュ
     int textWidth = 0;
     int textHeight = 0;
+    int lineSkip = kFontPixel;
+    int topLine = 0;        // 表示中ページの先頭行（スクロール目標）
+    double scrollY = 0;     // 現在のスクロール位置（テクスチャ上のピクセル）
+    Uint32 lastTicks = 0;
 
     bool open() const { return !queue.empty(); }
+    int totalLines() const { return lineSkip > 0 ? (textHeight + lineSkip - 1) / lineSkip : 0; }
+    bool hasMorePages() const { return topLine + kMessageLines < totalLines(); }
     void push(const std::string& text) { queue.push_back(text); }
     void advance() {
         if (queue.empty()) return;
+        if (texture && hasMorePages()) {
+            topLine += kMessageLines;
+            return;
+        }
         queue.pop_front();
         release();
     }
     void release() {
         if (texture) SDL_DestroyTexture(texture);
         texture = nullptr;
+        topLine = 0;
+        scrollY = 0;
     }
 };
+
+// 日本語向けの1文字単位の折り返し。句読点・閉じ括弧は行頭に来ないよう前の行にぶら下げる
+std::string wrapText(TTF_Font* font, const std::string& text, int maxWidth) {
+    static const std::string noLineStart[] = {"、", "。", "，", "．", "」", "』", "）", "】", "！", "？", "…", "ー", "っ", "ッ", "ゃ", "ゅ", "ょ"};
+    std::string result;
+    std::string line;
+    for (std::size_t i = 0; i < text.size();) {
+        unsigned char lead = static_cast<unsigned char>(text[i]);
+        std::size_t length = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+        std::string glyph = text.substr(i, length);
+        i += length;
+        if (glyph == "\n") {
+            result += line + "\n";
+            line.clear();
+            continue;
+        }
+        int width = 0;
+        TTF_SizeUTF8(font, (line + glyph).c_str(), &width, nullptr);
+        bool hanging = std::find(std::begin(noLineStart), std::end(noLineStart), glyph) != std::end(noLineStart);
+        if (width > maxWidth && !line.empty() && !hanging) {
+            result += line + "\n";
+            line.clear();
+            if (glyph == " ") continue;  // 行頭の空白は捨てる
+        }
+        line += glyph;
+    }
+    return result + line;
+}
 
 SDL_Texture* renderText(SDL_Renderer* renderer, TTF_Font* font, const std::string& text,
                         int wrapWidth, int& width, int& height) {
     SDL_Color white{235, 235, 225, 255};
-    SDL_Surface* surface = TTF_RenderUTF8_Solid_Wrapped(font, text.empty() ? " " : text.c_str(), white, wrapWidth);
+    std::string wrapped = wrapText(font, text, wrapWidth);
+    // wrapLength 0 = 改行文字でのみ改行（折り返し位置は wrapText で決めている）
+    SDL_Surface* surface = TTF_RenderUTF8_Solid_Wrapped(font, wrapped.empty() ? " " : wrapped.c_str(), white, 0);
     if (!surface) return nullptr;
     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
     width = surface->w;
@@ -574,12 +619,21 @@ SDL_Texture* renderText(SDL_Renderer* renderer, TTF_Font* font, const std::strin
 
 void drawMessageWindow(SDL_Renderer* renderer, TTF_Font* font, MessageWindow& window, Uint32 ticks) {
     if (!window.open()) return;
-    const SDL_Rect frame{24, kViewHeight - 24 - 160, kViewWidth - 48, 160};
     const int padding = 22;
+    window.lineSkip = std::max(1, TTF_FontLineSkip(font));
+    const int textAreaHeight = kMessageLines * window.lineSkip * kTextScale;
+    const int frameHeight = textAreaHeight + padding * 2;
+    const SDL_Rect frame{24, kViewHeight - 24 - frameHeight, kViewWidth - 48, frameHeight};
     if (!window.texture) {
-        int wrap = (frame.w - padding * 2) / kTextScale;
+        int wrap = (frame.w - padding * 2) / kTextScale - kFontPixel;  // ぶら下げ1文字分の余白を残す
         window.texture = renderText(renderer, font, window.queue.front(), wrap, window.textWidth, window.textHeight);
     }
+    // スクロール位置を目標ページへ近づける
+    double elapsed = window.lastTicks ? (ticks - window.lastTicks) / 1000.0 : 0.0;
+    window.lastTicks = ticks;
+    double targetY = window.topLine * window.lineSkip;
+    double step = kMessageLines * window.lineSkip / kMessageScrollDuration * std::min(elapsed, 0.05);
+    window.scrollY = window.scrollY < targetY ? std::min(targetY, window.scrollY + step) : targetY;
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 225);
     SDL_RenderFillRect(renderer, &frame);
@@ -594,12 +648,17 @@ void drawMessageWindow(SDL_Renderer* renderer, TTF_Font* font, MessageWindow& wi
     SDL_RenderDrawRect(renderer, &inner);
 
     if (window.texture) {
-        SDL_Rect destination{frame.x + padding, frame.y + padding,
+        SDL_Rect clip{frame.x + padding, frame.y + padding, frame.w - padding * 2, textAreaHeight};
+        SDL_RenderSetClipRect(renderer, &clip);
+        SDL_Rect destination{frame.x + padding,
+                             frame.y + padding - static_cast<int>(window.scrollY) * kTextScale,
                              window.textWidth * kTextScale, window.textHeight * kTextScale};
         SDL_RenderCopy(renderer, window.texture, nullptr, &destination);
+        SDL_RenderSetClipRect(renderer, nullptr);
     }
-    // 送り待ちの点滅カーソル
-    if ((ticks / 400) % 2 == 0) {
+    // 送り待ちの点滅カーソル（スクロール中は出さない）
+    bool scrolling = window.scrollY < window.topLine * window.lineSkip;
+    if (!scrolling && (ticks / 400) % 2 == 0) {
         int cx = frame.x + frame.w - padding - 8;
         int cy = frame.y + frame.h - padding - 6;
         for (int row = 0; row < 7; ++row) {
