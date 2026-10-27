@@ -1159,7 +1159,7 @@ int main(int argc, char* argv[]) {
 
         const std::string* shownSign = nullptr;
         Uint32 signStart = 0;
-        constexpr double kSignFadeMs = 180.0;
+        constexpr double kSignFadeMs = 80.0;
 
         bool running = true;
         Uint32 previousTime = SDL_GetTicks();
@@ -1236,9 +1236,10 @@ int main(int argc, char* argv[]) {
             }
 
             drawPseudo3D(renderer, *currentFloor, wallTexture, doorTexture, viewX, viewY, viewAngle);
-            // 看板は立ち止まっている間だけ表示（押しっぱなしで歩き続けるときは出ない）
+            // 看板は論理位置（入力時に確定済み）で判定し、移動・回転が半分進んだら出し始める。
+            // 次の移動を始めると論理位置が変わるので、すぐ消える
             const std::string* sign = nullptr;
-            if (!motion.active) {
+            if (!motion.active || motion.progress >= 0.5) {
                 auto found = currentFloor->signs[facing].find(edgeKey(cellX, cellY));
                 if (found != currentFloor->signs[facing].end()) sign = &found->second;
             }
