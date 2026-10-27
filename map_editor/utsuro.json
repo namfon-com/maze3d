@@ -1349,6 +1349,72 @@
           "text": "Examinations",
           "once": false
         }
+      ],
+      "signs": [
+        {
+          "locate": [
+            12,
+            12
+          ],
+          "facing": "N",
+          "text": "Armor Shop"
+        },
+        {
+          "locate": [
+            12,
+            12
+          ],
+          "facing": "S",
+          "text": "Shield Shop"
+        },
+        {
+          "locate": [
+            14,
+            12
+          ],
+          "facing": "N",
+          "text": "Weapon Shop"
+        },
+        {
+          "locate": [
+            16,
+            12
+          ],
+          "facing": "N",
+          "text": "Helmet Shop"
+        },
+        {
+          "locate": [
+            3,
+            14
+          ],
+          "facing": "W",
+          "text": "Bank"
+        },
+        {
+          "locate": [
+            15,
+            16
+          ],
+          "facing": "E",
+          "text": "Surgery"
+        },
+        {
+          "locate": [
+            15,
+            17
+          ],
+          "facing": "E",
+          "text": "Examinations"
+        },
+        {
+          "locate": [
+            15,
+            17
+          ],
+          "facing": "W",
+          "text": "Drugs"
+        }
       ]
     }
   ],
