@@ -12,7 +12,11 @@ CELL_SIZE = 48
 GRID_ORIGIN = 40
 MIN_MAP_SIZE = 1
 MAX_MAP_SIZE = 200
-EDGE_TYPES = {"wall", "door"}
+EDGE_TYPES = {"wall", "door", "oneway"}
+# 一方通行の壁はエディタ内部で "oneway:E" のように通れる向き付きで持つ（JSON では type + pass）
+ONEWAY_PREFIX = "oneway:"
+ONEWAY_COLOR = "#c0392b"
+OPPOSITE_FACING = {"N": "S", "S": "N", "E": "W", "W": "E"}
 DOOR_COLOR = "#f2c230"
 DOOR_OUTLINE = "#8a6400"
 SIGN_COLOR = "#fff1c8"
@@ -145,6 +149,8 @@ class MapCanvas(tk.Canvas):
                 self._continue_edge_drag(x, y)
             else:
                 self._place_nearest_edge(x, y, "wall" if tool == "wall" else "door")
+        elif tool == "oneway":
+            self._place_oneway(x, y)
         elif tool == "stair":
             self._place_cell_tool(x, y, self.editor.place_stair)
         elif tool == "spawn":
@@ -224,6 +230,32 @@ class MapCanvas(tk.Canvas):
         if distance <= CELL_SIZE * 0.38:
             self._draw_edge(edge, kind)
 
+    def _place_oneway(self, x: float, y: float) -> None:
+        """一方通行の壁を置く。クリックした側から反対側へ通れる。既存の一方通行壁をクリックすると向きを反転。"""
+        gx, gy = self._grid_position(x, y)
+        if not self._in_work_area(gx, gy):
+            return
+        candidates = [
+            (abs(gy - round(gy)) * CELL_SIZE, ("h", int(gx), round(gy))),
+            (abs(gx - round(gx)) * CELL_SIZE, ("v", round(gx), int(gy))),
+        ]
+        distance, edge = min(candidates, key=lambda candidate: candidate[0])
+        if distance > CELL_SIZE * 0.38 or not MapEditor._edge_in_bounds(edge, MAX_MAP_SIZE, MAX_MAP_SIZE):
+            return
+        floor = self.editor.current_floor
+        current = floor["edges"].get(edge, "")
+        if current.startswith(ONEWAY_PREFIX):
+            passing = OPPOSITE_FACING[current[len(ONEWAY_PREFIX):]]
+        elif edge[0] == "h":
+            passing = "S" if gy < edge[2] else "N"
+        else:
+            passing = "E" if gx < edge[1] else "W"
+        floor["edges"][edge] = ONEWAY_PREFIX + passing
+        self.editor.expand_for_edge(edge)
+        self.editor.mark_changed()
+        self.editor.status.set(f"一方通行の壁: {FACING_LABELS[passing]}向きにだけ通れます。再クリックで反転。")
+        self.redraw()
+
     def _draw_edge(self, edge: tuple[str, int, int], kind: str) -> None:
         floor = self.editor.current_floor
         if not MapEditor._edge_in_bounds(edge, MAX_MAP_SIZE, MAX_MAP_SIZE):
@@ -302,6 +334,13 @@ class MapCanvas(tk.Canvas):
                 else:
                     bar = (mx - half_thickness, my - half_length, mx + half_thickness, my + half_length)
                 self.create_rectangle(*bar, fill=DOOR_COLOR, outline=DOOR_OUTLINE, width=2)
+            elif kind.startswith(ONEWAY_PREFIX):
+                # 一方通行: 赤い破線の壁 + 通れる向きの矢印
+                self.create_line(x1, y1, x2, y2, fill=ONEWAY_COLOR, width=5, dash=(8, 4))
+                dx, dy = FACING_VECTORS[kind[len(ONEWAY_PREFIX):]]
+                mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+                self.create_line(mx - dx * 9, my - dy * 9, mx + dx * 13, my + dy * 13,
+                                 fill=ONEWAY_COLOR, width=3, arrow=tk.LAST, arrowshape=(9, 11, 4))
             else:
                 self.create_line(x1, y1, x2, y2, fill="#263238", width=5, capstyle=tk.ROUND)
 
@@ -659,6 +698,7 @@ class MapEditor(tk.Tk):
         tools = [
             ("wall", "壁（ドラッグ方向）"),
             ("door", "ドア（ドラッグ方向）"),
+            ("oneway", "一方通行の壁（クリック）"),
             ("erase", "消去"),
             ("stair", "階段（両端を指定）"),
             ("spawn", "ゲーム開始地点"),
@@ -672,7 +712,7 @@ class MapEditor(tk.Tk):
         ttk.Separator(sidebar).pack(fill=tk.X, pady=10)
         ttk.Label(sidebar, text="凡例", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
         ttk.Label(sidebar, text="■ 壁  ■ ドア  ● 階段  ● P 開始  ! イベント", foreground="#495057").pack(anchor=tk.W, pady=4)
-        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間／\nワープ）はセルをクリックして編集。\n看板はセル内の、見る方向の辺の\n近くをクリック（文字を空で削除）。\n\n点線の外側も描画できます。",
+        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n一方通行の壁は、通る前の側から\n境界の近くをクリック（再クリックで反転）。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間／\nワープ）はセルをクリックして編集。\n看板はセル内の、見る方向の辺の\n近くをクリック（文字を空で削除）。\n\n点線の外側も描画できます。",
                   justify=tk.LEFT, wraplength=220).pack(anchor=tk.W, pady=(6, 0))
 
         area = ttk.Frame(outer)
@@ -726,7 +766,7 @@ class MapEditor(tk.Tk):
         if self.tool.get() != "stair" and self.pending_stair:
             self.pending_stair = None
             self.canvas.redraw()
-        labels = {"wall": "壁", "door": "ドア", "erase": "消去",
+        labels = {"wall": "壁", "door": "ドア", "oneway": "一方通行の壁", "erase": "消去",
                   "stair": "階段", "spawn": "ゲーム開始地点", "event": "イベント", "sign": "看板"}
         self.status.set(f"{labels[self.tool.get()]}ツールを選択しました。")
 
@@ -1084,6 +1124,12 @@ class MapEditor(tk.Tk):
                 kind = raw_edge.get("type")
                 if axis not in ("h", "v") or kind not in EDGE_TYPES:
                     raise ValueError(f"{floor_id}.edges[{edge_number - 1}] の axis/type が不正です。")
+                if kind == "oneway":
+                    passing = raw_edge.get("pass")
+                    if passing not in (("N", "S") if axis == "h" else ("E", "W")):
+                        raise ValueError(f"{floor_id}.edges[{edge_number - 1}].pass は "
+                                         f"{'N / S' if axis == 'h' else 'E / W'} で指定してください。")
+                    kind = ONEWAY_PREFIX + passing
                 x, y = parse_coordinate(raw_edge.get("locate"), f"{floor_id}.edges[{edge_number - 1}]")
                 length = raw_edge.get("length", 1)
                 if isinstance(length, bool) or not isinstance(length, int) or length < 1:
@@ -1243,8 +1289,12 @@ class MapEditor(tk.Tk):
                     previous = position
                     continue
                 start_x, start_y = (run_start, fixed) if axis == "h" else (fixed, run_start)
-                output.append({"axis": axis, "locate": [start_x, start_y], "type": kind,
-                               "length": previous - run_start + 1})
+                entry = {"axis": axis, "locate": [start_x, start_y], "type": kind,
+                         "length": previous - run_start + 1}
+                if kind.startswith(ONEWAY_PREFIX):
+                    entry["type"] = "oneway"
+                    entry["pass"] = kind[len(ONEWAY_PREFIX):]
+                output.append(entry)
                 if position is not None:
                     run_start = previous = position
         return output

@@ -90,6 +90,13 @@ MapData loadMap(const fs::path& path) {
             std::string type = ej.at("type").get<std::string>();
             int x = ej.at("locate").at(0).get<int>();
             int y = ej.at("locate").at(1).get<int>();
+            if (type == "oneway") {
+                // 一方通行の壁: pass の向きに進むときだけ通り抜けられる。内部では "oneway:E" の形で持つ
+                std::string pass = ej.at("pass").get<std::string>();
+                bool valid = axis == "h" ? (pass == "N" || pass == "S") : (pass == "E" || pass == "W");
+                if (!valid) throw std::runtime_error("oneway edge has invalid pass direction: " + pass);
+                type += ":" + pass;
+            }
             int length = ej.value("length", 1);
             for (int offset = 0; offset < length; ++offset) {
                 if (axis == "h") floor.hEdges[edgeKey(x + offset, y)] = type;
@@ -337,23 +344,16 @@ bool moveBlocked(const Floor& floor, int cellX, int cellY, int stepX, int stepY)
     int targetY = cellY + stepY;
     if (targetX < 0 || targetX >= floor.width || targetY < 0 || targetY >= floor.height) return true;
 
-    if (stepX > 0) {
-        std::string edge = vEdge(floor, targetX, cellY);
-        return !edge.empty() && edge != "door";
-    }
-    if (stepX < 0) {
-        std::string edge = vEdge(floor, cellX, cellY);
-        return !edge.empty() && edge != "door";
-    }
-    if (stepY > 0) {
-        std::string edge = hEdge(floor, cellX, targetY);
-        return !edge.empty() && edge != "door";
-    }
-    if (stepY < 0) {
-        std::string edge = hEdge(floor, cellX, cellY);
-        return !edge.empty() && edge != "door";
-    }
-    return false;
+    // 進む向き（E/W/S/N）と、その間にある境界
+    std::string edge;
+    const char* direction = "";
+    if (stepX > 0) { edge = vEdge(floor, targetX, cellY); direction = "E"; }
+    else if (stepX < 0) { edge = vEdge(floor, cellX, cellY); direction = "W"; }
+    else if (stepY > 0) { edge = hEdge(floor, cellX, targetY); direction = "S"; }
+    else if (stepY < 0) { edge = hEdge(floor, cellX, cellY); direction = "N"; }
+    if (edge.empty() || edge == "door") return false;
+    if (edge.rfind("oneway:", 0) == 0) return edge.substr(7) != direction;
+    return true;
 }
 
 // 距離による減光 (遠くほど闇に沈む)
@@ -511,11 +511,32 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
         int y = static_cast<int>(key & 0xffffffffu);
         int px = originX + x * cellSize;
         int py = originY + y * cellSize;
+        bool oneway = type.rfind("oneway:", 0) == 0;
         if (type == "door") SDL_SetRenderDrawColor(renderer, 242, 194, 48, 255);
+        else if (oneway) SDL_SetRenderDrawColor(renderer, 240, 120, 110, 255);
         else SDL_SetRenderDrawColor(renderer, 220, 218, 210, 255);
         SDL_Rect line = horizontal ? SDL_Rect{px, py - 1, cellSize + 1, 2}
                                    : SDL_Rect{px - 1, py, 2, cellSize + 1};
         SDL_RenderFillRect(renderer, &line);
+        if (oneway) {
+            // 通れる向きの矢印（線の中央から pass 側へ）
+            int facing = facingIndex(type.substr(7));
+            int dx = kDirX[facing], dy = kDirY[facing];
+            int cx = horizontal ? px + cellSize / 2 : px;
+            int cy = horizontal ? py : py + cellSize / 2;
+            int length = std::max(3, cellSize / 4);
+            int tipX = cx + dx * length, tipY = cy + dy * length;
+            int tailX = cx - dx * length / 2, tailY = cy - dy * length / 2;
+            int wing = std::max(2, length / 2);
+            for (int t = -1; t <= 1; ++t) {
+                SDL_RenderDrawLine(renderer, tailX + dy * t, tailY + dx * t, tipX + dy * t, tipY + dx * t);
+            }
+            for (int side : {-1, 1}) {
+                SDL_RenderDrawLine(renderer, tipX, tipY,
+                                   tipX - dx * wing + dy * wing * side, tipY - dy * wing + dx * wing * side);
+            }
+            return;
+        }
         if (type != "door") return;
         SDL_Rect bar = horizontal
             ? SDL_Rect{px + (cellSize - doorLength) / 2, py - doorThickness / 2, doorLength, doorThickness}
