@@ -130,7 +130,7 @@
             10
           ],
           "type": "wall",
-          "length": 3
+          "length": 7
         },
         {
           "axis": "h",
@@ -140,33 +140,6 @@
           ],
           "type": "wall",
           "length": 5
-        },
-        {
-          "axis": "h",
-          "locate": [
-            12,
-            11
-          ],
-          "type": "wall",
-          "length": 1
-        },
-        {
-          "axis": "h",
-          "locate": [
-            14,
-            11
-          ],
-          "type": "wall",
-          "length": 1
-        },
-        {
-          "axis": "h",
-          "locate": [
-            16,
-            11
-          ],
-          "type": "wall",
-          "length": 1
         },
         {
           "axis": "h",
@@ -342,24 +315,6 @@
         {
           "axis": "h",
           "locate": [
-            12,
-            14
-          ],
-          "type": "wall",
-          "length": 1
-        },
-        {
-          "axis": "h",
-          "locate": [
-            16,
-            14
-          ],
-          "type": "wall",
-          "length": 1
-        },
-        {
-          "axis": "h",
-          "locate": [
             2,
             15
           ],
@@ -405,11 +360,11 @@
         {
           "axis": "h",
           "locate": [
-            3,
+            1,
             16
           ],
           "type": "wall",
-          "length": 1
+          "length": 3
         },
         {
           "axis": "h",
@@ -670,16 +625,7 @@
             10
           ],
           "type": "wall",
-          "length": 4
-        },
-        {
-          "axis": "v",
-          "locate": [
-            2,
-            14
-          ],
-          "type": "wall",
-          "length": 1
+          "length": 6
         },
         {
           "axis": "v",
@@ -1075,16 +1021,7 @@
             6
           ],
           "type": "wall",
-          "length": 4
-        },
-        {
-          "axis": "v",
-          "locate": [
-            13,
-            11
-          ],
-          "type": "wall",
-          "length": 1
+          "length": 6
         },
         {
           "axis": "v",
@@ -1153,10 +1090,10 @@
           "axis": "v",
           "locate": [
             15,
-            11
+            10
           ],
           "type": "wall",
-          "length": 1
+          "length": 2
         },
         {
           "axis": "v",
@@ -1234,19 +1171,10 @@
           "axis": "v",
           "locate": [
             17,
-            11
+            10
           ],
           "type": "wall",
-          "length": 3
-        },
-        {
-          "axis": "v",
-          "locate": [
-            17,
-            15
-          ],
-          "type": "wall",
-          "length": 5
+          "length": 10
         },
         {
           "axis": "v",
@@ -1357,7 +1285,7 @@
             12
           ],
           "facing": "N",
-          "text": "Armor Shop"
+          "text": "ARMOR"
         },
         {
           "locate": [
@@ -1365,7 +1293,7 @@
             12
           ],
           "facing": "S",
-          "text": "Shield Shop"
+          "text": "SHIELDS"
         },
         {
           "locate": [
@@ -1373,7 +1301,7 @@
             12
           ],
           "facing": "N",
-          "text": "Weapon Shop"
+          "text": "WEAPONS"
         },
         {
           "locate": [
@@ -1381,7 +1309,15 @@
             12
           ],
           "facing": "N",
-          "text": "Helmet Shop"
+          "text": "HELMS"
+        },
+        {
+          "locate": [
+            16,
+            12
+          ],
+          "facing": "S",
+          "text": "TAILOR"
         },
         {
           "locate": [
@@ -1393,11 +1329,19 @@
         },
         {
           "locate": [
+            6,
+            14
+          ],
+          "facing": "N",
+          "text": "DO NOT ENTER !!"
+        },
+        {
+          "locate": [
             15,
             16
           ],
           "facing": "E",
-          "text": "Surgery"
+          "text": "SURGERY"
         },
         {
           "locate": [
@@ -1405,7 +1349,7 @@
             17
           ],
           "facing": "E",
-          "text": "Examinations"
+          "text": "EXAMINATIONS"
         },
         {
           "locate": [
@@ -1413,7 +1357,7 @@
             17
           ],
           "facing": "W",
-          "text": "Drugs"
+          "text": "DRUGS"
         }
       ]
     }
@@ -1423,7 +1367,7 @@
     "floorId": "1F",
     "locate": [
       6,
-      16
+      17
     ],
     "facing": "N"
   }
