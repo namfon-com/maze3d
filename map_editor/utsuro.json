@@ -4,7 +4,7 @@
     {
       "id": "1F",
       "width": 21,
-      "height": 26,
+      "height": 27,
       "edges": [
         {
           "axis": "h",
@@ -567,15 +567,6 @@
         {
           "axis": "h",
           "locate": [
-            14,
-            25
-          ],
-          "type": "wall",
-          "length": 1
-        },
-        {
-          "axis": "h",
-          "locate": [
             16,
             25
           ],
@@ -766,6 +757,16 @@
           "axis": "v",
           "locate": [
             5,
+            12
+          ],
+          "type": "oneway",
+          "length": 1,
+          "pass": "W"
+        },
+        {
+          "axis": "v",
+          "locate": [
+            5,
             1
           ],
           "type": "wall",
@@ -787,7 +788,16 @@
             11
           ],
           "type": "wall",
-          "length": 3
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            5,
+            13
+          ],
+          "type": "wall",
+          "length": 1
         },
         {
           "axis": "v",
@@ -982,6 +992,15 @@
           "axis": "v",
           "locate": [
             12,
+            24
+          ],
+          "type": "door",
+          "length": 1
+        },
+        {
+          "axis": "v",
+          "locate": [
+            12,
             11
           ],
           "type": "wall",
@@ -1044,6 +1063,15 @@
         {
           "axis": "v",
           "locate": [
+            13,
+            25
+          ],
+          "type": "wall",
+          "length": 2
+        },
+        {
+          "axis": "v",
+          "locate": [
             14,
             11
           ],
@@ -1058,15 +1086,6 @@
           ],
           "type": "wall",
           "length": 3
-        },
-        {
-          "axis": "v",
-          "locate": [
-            14,
-            25
-          ],
-          "type": "wall",
-          "length": 1
         },
         {
           "axis": "v",
@@ -1276,9 +1295,48 @@
           "type": "message",
           "text": "Examinations",
           "once": false
+        },
+        {
+          "locate": [
+            14,
+            25
+          ],
+          "type": "warp",
+          "text": "イロ イッカイ ヅツ・・・。",
+          "to": {
+            "floorId": "1F",
+            "locate": [
+              5,
+              12
+            ]
+          }
         }
       ],
       "signs": [
+        {
+          "locate": [
+            4,
+            4
+          ],
+          "facing": "W",
+          "text": "CEMETERY"
+        },
+        {
+          "locate": [
+            9,
+            7
+          ],
+          "facing": "E",
+          "text": "JAIL"
+        },
+        {
+          "locate": [
+            9,
+            8
+          ],
+          "facing": "E",
+          "text": "JAIL"
+        },
         {
           "locate": [
             12,
@@ -1334,6 +1392,14 @@
           ],
           "facing": "N",
           "text": "DO NOT ENTER !!"
+        },
+        {
+          "locate": [
+            13,
+            16
+          ],
+          "facing": "E",
+          "text": "< MARKET"
         },
         {
           "locate": [
