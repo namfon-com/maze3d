@@ -22,7 +22,7 @@ namespace fs = std::filesystem;
 struct StairEnd { std::string floorId; int x = 0; int y = 0; };
 struct Stair { std::string id; StairEnd ends[2]; };
 // セルに置くイベント。type: "message"（メッセージ表示）/ "treasure"（宝箱: 1回だけ gold / item を入手）
-// / "recruit"（人間に出会う: character の人物を仲間に誘える）
+// / "recruit"（人間に出会う: character の人物を仲間に誘える）/ "warp"（踏むと warpTo へ飛ばされる）
 struct MapEvent {
     std::string type;
     std::string text;
@@ -30,6 +30,10 @@ struct MapEvent {
     int gold = 0;
     std::string item;
     std::string character;
+    std::string warpFloor;
+    int warpX = 0;
+    int warpY = 0;
+    int warpFacing = -1;  // 到着時の向き。-1 なら向きはそのまま
 };
 struct Floor {
     std::string id;
@@ -95,13 +99,23 @@ MapData loadMap(const fs::path& path) {
         for (const auto& evj : fj.value("events", json::array())) {
             MapEvent event;
             event.type = evj.at("type").get<std::string>();
-            if (event.type != "message" && event.type != "treasure" && event.type != "recruit")
+            if (event.type != "message" && event.type != "treasure" && event.type != "recruit" && event.type != "warp")
                 throw std::runtime_error("Unknown event type: " + event.type);
             event.text = evj.value("text", "");
             event.once = evj.value("once", false);
             event.gold = evj.value("gold", 0);
             event.item = evj.value("item", "");
             event.character = evj.value("character", "");
+            if (event.type == "warp") {
+                const json& to = evj.at("to");
+                event.warpFloor = to.at("floorId").get<std::string>();
+                event.warpX = to.at("locate").at(0).get<int>();
+                event.warpY = to.at("locate").at(1).get<int>();
+                if (to.contains("facing")) {
+                    event.warpFacing = facingIndex(to["facing"].get<std::string>());
+                    if (event.warpFacing < 0) throw std::runtime_error("warp facing must be one of N/E/S/W");
+                }
+            }
             int x = evj.at("locate").at(0).get<int>();
             int y = evj.at("locate").at(1).get<int>();
             floor.events[edgeKey(x, y)] = event;
@@ -524,6 +538,8 @@ void drawMapPreview(SDL_Renderer* renderer, const Floor& floor, const MapData& m
         } else if (event.type == "recruit") {
             if (done) continue;  // 仲間になった人物はもういない
             SDL_SetRenderDrawColor(renderer, 110, 210, 120, 255);
+        } else if (event.type == "warp") {
+            SDL_SetRenderDrawColor(renderer, 170, 120, 240, 255);
         } else {
             if (done) SDL_SetRenderDrawColor(renderer, 60, 80, 110, 255);
             else SDL_SetRenderDrawColor(renderer, 120, 180, 255, 255);
@@ -1060,6 +1076,12 @@ int main(int argc, char* argv[]) {
             for (const auto& [key, event] : floor.events) {
                 if (event.type == "recruit" && !database.characters.count(event.character))
                     throw std::runtime_error("Recruit event refers to unknown character: " + event.character);
+                if (event.type == "warp") {
+                    const Floor* target = findFloor(map, event.warpFloor);
+                    if (!target || event.warpX < 0 || event.warpY < 0
+                        || event.warpX >= target->width || event.warpY >= target->height)
+                        throw std::runtime_error("Warp destination is outside the map: " + event.warpFloor);
+                }
             }
         }
         PortraitCache portraits;
@@ -1070,13 +1092,34 @@ int main(int argc, char* argv[]) {
         state.party.push_back(database.characters.at(database.heroId));
         MessageWindow messages;
 
+        // ワープ: 文章があれば読み終えてから飛ぶ。着地点のイベントは起こさない（ワープの往復ループ防止）
+        const MapEvent* pendingWarp = nullptr;
+        Uint32 warpFlashStart = 0;
+        constexpr double kWarpFlashMs = 400.0;
+        auto warpTo = [&](const MapEvent& warp) {
+            currentFloorId = warp.warpFloor;
+            currentFloor = findFloor(map, currentFloorId);
+            cellX = warp.warpX;
+            cellY = warp.warpY;
+            if (warp.warpFacing >= 0) facing = warp.warpFacing;
+            motion = {};
+            pendingAction = Action::None;
+            viewX = cellX + 0.5;
+            viewY = cellY + 0.5;
+            viewAngle = facing * kPi / 2;
+            warpFlashStart = SDL_GetTicks();
+        };
+
         auto triggerEvent = [&]() {
             auto found = currentFloor->events.find(edgeKey(cellX, cellY));
             if (found == currentFloor->events.end()) return;
             const MapEvent& event = found->second;
             std::string id = eventId(currentFloorId, cellX, cellY);
             bool done = state.doneEvents.count(id) > 0;
-            if (event.type == "message") {
+            if (event.type == "warp") {
+                if (!event.text.empty()) messages.push(event.text);
+                pendingWarp = &event;
+            } else if (event.type == "message") {
                 if (event.once && done) return;
                 messages.push(event.text);
                 if (event.once) state.doneEvents.insert(id);
@@ -1226,6 +1269,10 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
+            if (pendingWarp && !motion.active && !messages.open()) {
+                warpTo(*pendingWarp);
+                pendingWarp = nullptr;
+            }
             if (!motion.active && !messages.open()) {
                 viewX = cellX + 0.5;
                 viewY = cellY + 0.5;
@@ -1236,6 +1283,15 @@ int main(int argc, char* argv[]) {
             }
 
             drawPseudo3D(renderer, *currentFloor, wallTexture, doorTexture, viewX, viewY, viewAngle);
+            if (warpFlashStart && currentTime - warpFlashStart < kWarpFlashMs) {
+                // ワープ直後: 白い閃光が引いていく
+                double fade = 1.0 - (currentTime - warpFlashStart) / kWarpFlashMs;
+                SDL_Rect view{0, 0, kViewWidth, kViewHeight};
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(renderer, 235, 225, 255, static_cast<Uint8>(fade * fade * 255));
+                SDL_RenderFillRect(renderer, &view);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+            }
             // 看板は論理位置（入力時に確定済み）で判定し、移動・回転が半分進んだら出し始める。
             // 次の移動を始めると論理位置が変わるので、すぐ消える
             const std::string* sign = nullptr;

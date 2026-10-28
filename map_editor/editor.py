@@ -22,7 +22,8 @@ FACINGS = ["N", "E", "S", "W"]
 FACING_VECTORS = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}
 FACING_LABELS = {"N": "北", "E": "東", "S": "南", "W": "西"}
 # イベントマスの種類
-EVENT_TYPES = {"message": "メッセージ", "treasure": "宝箱", "recruit": "人間（勧誘）"}
+EVENT_TYPES = {"message": "メッセージ", "treasure": "宝箱", "recruit": "人間（勧誘）", "warp": "ワープ"}
+KEEP_FACING_LABEL = "そのまま"
 # ゲーム本体と共有するキャラクター定義（勧誘イベントの人物リストに使う）
 CHARACTERS_PATH = Path(__file__).resolve().parent.parent / "assets" / "data" / "characters.json"
 
@@ -74,6 +75,16 @@ def parse_event(raw: Any, label: str) -> dict[str, Any]:
         if not isinstance(character, str) or not character:
             raise ValueError(f"{label}.character にキャラクターIDを指定してください。")
         event["character"] = character
+    elif kind == "warp":
+        to = raw.get("to")
+        if not isinstance(to, dict) or not isinstance(to.get("floorId"), str):
+            raise ValueError(f"{label}.to に行き先（floorId, locate）を指定してください。")
+        tx, ty = parse_coordinate(to.get("locate"), f"{label}.to")
+        event["to"] = {"floorId": to["floorId"], "locate": [tx, ty]}
+        if "facing" in to:
+            if to["facing"] not in FACINGS:
+                raise ValueError(f"{label}.to.facing は N / E / S / W のいずれかで指定してください。")
+            event["to"]["facing"] = to["facing"]
     else:
         gold = raw.get("gold", 0)
         item = raw.get("item", "")
@@ -298,7 +309,16 @@ class MapCanvas(tk.Canvas):
             x1 = left + event_x * CELL_SIZE + 6
             y1 = top + event_y * CELL_SIZE + 6
             x2, y2 = x1 + CELL_SIZE - 12, y1 + CELL_SIZE - 12
-            if event["type"] == "recruit":
+            if event["type"] == "warp":
+                # ワープ床: 紫の渦（同心円）と行き先
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                self.create_oval(x1, y1, x2, y2, fill="#e3d4f7", outline="#6a3fb5", width=2)
+                self.create_oval(cx - 8, cy - 8, cx + 8, cy + 8, outline="#6a3fb5", width=2)
+                self.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill="#6a3fb5", outline="")
+                to = event["to"]
+                destination = f"→{to['floorId']} {to['locate'][0]},{to['locate'][1]}"
+                self.create_text(cx, y2 + 1, text=destination, fill="#4a2a85", font=("Segoe UI", 7, "bold"))
+            elif event["type"] == "recruit":
                 self.create_rectangle(x1, y1, x2, y2, fill="#c9f0cc", outline="#2e7d32", width=2)
                 self.create_text((x1 + x2) / 2, (y1 + y2) / 2, text="人", fill="#1b5e20",
                                  font=("Segoe UI", 12, "bold"))
@@ -368,7 +388,8 @@ class MapCanvas(tk.Canvas):
 class EventDialog(tk.Toplevel):
     """イベントマスの編集ダイアログ。result は None（キャンセル）/ "delete" / イベント辞書。"""
 
-    def __init__(self, master: tk.Misc, cell: tuple[int, int], event: dict[str, Any] | None) -> None:
+    def __init__(self, master: tk.Misc, cell: tuple[int, int], event: dict[str, Any] | None,
+                 floor_sizes: dict[str, tuple[int, int]], current_floor_id: str) -> None:
         super().__init__(master)
         self.title(f"イベント編集 {cell}")
         self.transient(master)
@@ -382,6 +403,12 @@ class EventDialog(tk.Toplevel):
         self.item = tk.StringVar(value=event.get("item", ""))
         self.characters = load_character_choices()
         self.character = tk.StringVar(value=self._character_label(event.get("character", "")))
+        self.floor_sizes = floor_sizes
+        to = event.get("to", {"floorId": current_floor_id, "locate": [cell[0], cell[1]]})
+        self.warp_floor = tk.StringVar(value=to["floorId"])
+        self.warp_x = tk.StringVar(value=str(to["locate"][0]))
+        self.warp_y = tk.StringVar(value=str(to["locate"][1]))
+        self.warp_facing = tk.StringVar(value=FACING_LABELS.get(to.get("facing", ""), KEEP_FACING_LABEL))
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill=tk.BOTH, expand=True)
@@ -410,9 +437,29 @@ class EventDialog(tk.Toplevel):
         self.character_combo.grid(row=7, column=1, sticky="w", pady=(8, 0))
         ttk.Label(body, text="人物は assets/data/characters.json で定義します。\n文章を空にすると既定のセリフになります。",
                   foreground="#687078", justify=tk.LEFT).grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(body, text="ワープ先:").grid(row=9, column=0, sticky="w", pady=(8, 0))
+        warp = ttk.Frame(body)
+        warp.grid(row=9, column=1, sticky="w", pady=(8, 0))
+        self.warp_widgets = [
+            ttk.Combobox(warp, textvariable=self.warp_floor, values=list(floor_sizes), width=6, state="readonly"),
+            ttk.Label(warp, text=" x"),
+            ttk.Spinbox(warp, from_=0, to=MAX_MAP_SIZE - 1, textvariable=self.warp_x, width=4),
+            ttk.Label(warp, text=" y"),
+            ttk.Spinbox(warp, from_=0, to=MAX_MAP_SIZE - 1, textvariable=self.warp_y, width=4),
+        ]
+        for widget in self.warp_widgets:
+            widget.pack(side=tk.LEFT)
+        ttk.Label(body, text="到着時の向き:").grid(row=10, column=0, sticky="w", pady=(4, 0))
+        self.warp_facing_combo = ttk.Combobox(
+            body, textvariable=self.warp_facing, width=8, state="readonly",
+            values=[KEEP_FACING_LABEL] + [FACING_LABELS[facing] for facing in FACINGS])
+        self.warp_facing_combo.grid(row=10, column=1, sticky="w", pady=(4, 0))
+        self.warp_widgets.append(self.warp_facing_combo)
+        ttk.Label(body, text="文章を入れるとワープ前に表示します（空なら無言でワープ）。",
+                  foreground="#687078").grid(row=11, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=9, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        buttons.grid(row=12, column=0, columnspan=2, sticky="e", pady=(12, 0))
         if existing:
             ttk.Button(buttons, text="削除", command=self._delete).pack(side=tk.LEFT, padx=(0, 16))
         ttk.Button(buttons, text="OK", command=self._ok).pack(side=tk.LEFT)
@@ -438,6 +485,11 @@ class EventDialog(tk.Toplevel):
         self.item_entry.configure(state=tk.NORMAL if kind == "treasure" else tk.DISABLED)
         self.character_combo.configure(state="readonly" if kind == "recruit" and self.characters
                                        else tk.NORMAL if kind == "recruit" else tk.DISABLED)
+        for widget in self.warp_widgets:
+            if isinstance(widget, ttk.Combobox):
+                widget.configure(state="readonly" if kind == "warp" else tk.DISABLED)
+            elif not isinstance(widget, ttk.Label):
+                widget.configure(state=tk.NORMAL if kind == "warp" else tk.DISABLED)
 
     def _ok(self) -> None:
         text = self.text.get("1.0", "end-1c").rstrip()
@@ -452,6 +504,22 @@ class EventDialog(tk.Toplevel):
                 messagebox.showerror("入力エラー", "仲間にする人物を選んでください。", parent=self)
                 return
             self.result = {"type": "recruit", "text": text, "character": character}
+        elif self.kind.get() == "warp":
+            try:
+                tx, ty = int(self.warp_x.get()), int(self.warp_y.get())
+            except ValueError:
+                tx = ty = -1
+            width, height = self.floor_sizes[self.warp_floor.get()]
+            if not (0 <= tx < width and 0 <= ty < height):
+                messagebox.showerror(
+                    "入力エラー", f"ワープ先は {self.warp_floor.get()} の範囲内（x: 0〜{width - 1}、y: 0〜{height - 1}）で指定してください。",
+                    parent=self)
+                return
+            to: dict[str, Any] = {"floorId": self.warp_floor.get(), "locate": [tx, ty]}
+            for facing, label in FACING_LABELS.items():
+                if label == self.warp_facing.get():
+                    to["facing"] = facing
+            self.result = {"type": "warp", "text": text, "to": to}
         else:
             try:
                 gold = int(self.gold.get() or 0)
@@ -594,7 +662,7 @@ class MapEditor(tk.Tk):
             ("erase", "消去"),
             ("stair", "階段（両端を指定）"),
             ("spawn", "ゲーム開始地点"),
-            ("event", "イベント（メッセージ／宝箱／人間）"),
+            ("event", "イベント（メッセージ／宝箱／人間／ワープ）"),
             ("sign", "看板（立ち止まると表示）"),
         ]
         for value, text in tools:
@@ -604,7 +672,7 @@ class MapEditor(tk.Tk):
         ttk.Separator(sidebar).pack(fill=tk.X, pady=10)
         ttk.Label(sidebar, text="凡例", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
         ttk.Label(sidebar, text="■ 壁  ■ ドア  ● 階段  ● P 開始  ! イベント", foreground="#495057").pack(anchor=tk.W, pady=4)
-        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間）は\nセルをクリックして編集。\n看板はセル内の、見る方向の辺の\n近くをクリック（文字を空で削除）。\n\n点線の外側も描画できます。",
+        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間／\nワープ）はセルをクリックして編集。\n看板はセル内の、見る方向の辺の\n近くをクリック（文字を空で削除）。\n\n点線の外側も描画できます。",
                   justify=tk.LEFT, wraplength=220).pack(anchor=tk.W, pady=(6, 0))
 
         area = ttk.Frame(outer)
@@ -711,7 +779,8 @@ class MapEditor(tk.Tk):
     def edit_event(self, cell: tuple[int, int]) -> None:
         floor = self.current_floor
         current = floor["events"].get(cell)
-        dialog = EventDialog(self, cell, current)
+        dialog = EventDialog(self, cell, current, {f["id"]: (f["width"], f["height"]) for f in self.floors},
+                             floor["id"])
         if dialog.result is None:
             return
         if dialog.result == "delete":
@@ -851,11 +920,17 @@ class MapEditor(tk.Tk):
         floor = self.current_floor
         linked = [stair for stair in self.stairs
                   if any(end["floorId"] == floor["id"] for end in stair["ends"])]
+        warps = self._warps_into(floor["id"], lambda x, y: True)
+        warps = [(other, cell) for other, cell in warps if other is not floor]
         prompt = f"フロア {floor['id']} を削除しますか？"
         if linked:
             prompt += f"\nこのフロアに接続する階段 {len(linked)} 件も削除されます。"
+        if warps:
+            prompt += f"\nこのフロアへのワープ {len(warps)} 件も削除されます。"
         if not messagebox.askyesno("フロア削除", prompt, parent=self):
             return
+        for other, cell in warps:
+            del other["events"][cell]
         self.floors.remove(floor)
         self.stairs = [stair for stair in self.stairs
                        if not any(end["floorId"] == floor["id"] for end in stair["ends"])]
@@ -886,8 +961,11 @@ class MapEditor(tk.Tk):
                  and (self.spawn["locate"][0] >= width or self.spawn["locate"][1] >= height))
         out_events = [cell for cell in floor["events"] if cell[0] >= width or cell[1] >= height]
         out_signs = [key for key in floor["signs"] if key[0] >= width or key[1] >= height]
-        if (out_edges or out_stairs or out_spawn or out_events or out_signs) and not messagebox.askyesno(
-            "範囲外データ", f"範囲外になる線分 {len(out_edges)} 本、階段 {len(out_stairs)} 件、イベント {len(out_events)} 件、看板 {len(out_signs)} 件、開始地点 {'1件' if out_spawn else '0件'}を削除して変更しますか？",
+        out_warps = [(other, cell) for other, cell in
+                     self._warps_into(floor["id"], lambda x, y: x >= width or y >= height)
+                     if not (other is floor and cell in out_events)]
+        if (out_edges or out_stairs or out_spawn or out_events or out_signs or out_warps) and not messagebox.askyesno(
+            "範囲外データ", f"範囲外になる線分 {len(out_edges)} 本、階段 {len(out_stairs)} 件、イベント {len(out_events)} 件、看板 {len(out_signs)} 件、開始地点 {'1件' if out_spawn else '0件'}、ここへのワープ {len(out_warps)} 件を削除して変更しますか？",
                 parent=self):
             return
         for edge in out_edges:
@@ -901,11 +979,19 @@ class MapEditor(tk.Tk):
             del floor["events"][cell]
         for key in out_signs:
             del floor["signs"][key]
+        for other, cell in out_warps:
+            del other["events"][cell]
         floor["width"], floor["height"] = width, height
         self._update_map_label()
         self.canvas.redraw()
         self.mark_changed()
         self.status.set(f"{floor['id']} のサイズを {width} × {height} に変更しました。")
+
+    def _warps_into(self, floor_id: str, hit: Any) -> list[tuple[dict[str, Any], tuple[int, int]]]:
+        """floor_id 行きで、行き先座標 (x, y) が hit(x, y) を満たすワープの (フロア, セル) 一覧。"""
+        return [(floor, cell) for floor in self.floors for cell, event in floor["events"].items()
+                if event["type"] == "warp" and event["to"]["floorId"] == floor_id
+                and hit(*event["to"]["locate"])]
 
     @staticmethod
     def _edge_in_bounds(edge: tuple[str, int, int], width: int, height: int) -> bool:
@@ -1038,6 +1124,18 @@ class MapEditor(tk.Tk):
                     raise ValueError(f"{label}.text に文字を指定してください。")
                 floor["signs"][(sx, sy, facing)] = text
             floors.append(floor)
+
+        floor_sizes = {floor["id"]: (floor["width"], floor["height"]) for floor in floors}
+        for floor in floors:
+            for cell, event in floor["events"].items():
+                if event["type"] != "warp":
+                    continue
+                to = event["to"]
+                size = floor_sizes.get(to["floorId"])
+                if size is None:
+                    raise ValueError(f"{floor['id']} {cell} のワープ先フロア {to['floorId']} がありません。")
+                if not (0 <= to["locate"][0] < size[0] and 0 <= to["locate"][1] < size[1]):
+                    raise ValueError(f"{floor['id']} {cell} のワープ先 {to['locate']} がセル範囲外です。")
 
         raw_stairs = document.get("stairs", [])
         if not isinstance(raw_stairs, list):
