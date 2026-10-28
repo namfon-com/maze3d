@@ -619,6 +619,47 @@ class EventDialog(tk.Toplevel):
         self.destroy()
 
 
+class SignDialog(tk.Toplevel):
+    """看板の編集ダイアログ。result は None（キャンセル）/ "delete" / 文字列。"""
+
+    def __init__(self, master: tk.Misc, title: str, prompt: str, text: str) -> None:
+        super().__init__(master)
+        self.title(title)
+        self.transient(master)
+        self.resizable(False, False)
+        self.result: str | None = None
+        self.text = tk.StringVar(value=text)
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text=prompt, justify=tk.LEFT).pack(anchor=tk.W)
+        entry = ttk.Entry(body, textvariable=self.text, width=36)
+        entry.pack(fill=tk.X, pady=(6, 0))
+        buttons = ttk.Frame(body)
+        buttons.pack(anchor=tk.E, pady=(12, 0))
+        if text:
+            ttk.Button(buttons, text="削除", command=self._delete).pack(side=tk.LEFT, padx=(0, 16))
+        ttk.Button(buttons, text="OK", command=self._ok).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="キャンセル", command=self.destroy).pack(side=tk.LEFT, padx=(6, 0))
+
+        self.geometry(f"+{master.winfo_rootx() + 260}+{master.winfo_rooty() + 120}")
+        self.bind("<Return>", lambda _event: self._ok())
+        self.bind("<Escape>", lambda _event: self.destroy())
+        entry.focus_set()
+        entry.select_range(0, tk.END)
+        self.grab_set()
+        self.wait_window(self)
+
+    def _ok(self) -> None:
+        text = self.text.get().strip()
+        self.result = text if text else "delete"
+        self.destroy()
+
+    def _delete(self) -> None:
+        self.result = "delete"
+        self.destroy()
+
+
 class MapEditor(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -755,7 +796,7 @@ class MapEditor(tk.Tk):
         ttk.Separator(sidebar).pack(fill=tk.X, pady=10)
         ttk.Label(sidebar, text="凡例", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
         ttk.Label(sidebar, text="■ 壁  ■ ドア  ● 階段  ● P 開始  ! イベント", foreground="#495057").pack(anchor=tk.W, pady=4)
-        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n一方通行の壁は、通る前の側から\n境界の近くをクリック（再クリックで反転）。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間／\nワープ）はセルをクリックして編集。\n看板はセル内の、見る方向の辺の\n近くをクリック（文字を空で削除）。\n\n点線の外側も描画できます。",
+        ttk.Label(sidebar, text="壁・ドアは境界線上をドラッグ。\nドラッグ方向に沿って描画します。\nクリック時は近い境界に1線分を配置。\n一方通行の壁は、通る前の側から\n境界の近くをクリック（再クリックで反転）。\n階段は異なるフロアのセルを\n順に2回クリック。開始地点は\n開始地点ツールでセルをクリック。\nイベント（メッセージ／宝箱／人間／\nワープ）はセルをクリックして編集。\n看板はセル内の、見る方向の辺の\n近くをクリック（ダイアログで削除可）。\n\n点線の外側も描画できます。",
                   justify=tk.LEFT, wraplength=220).pack(anchor=tk.W, pady=(6, 0))
 
         area = ttk.Frame(outer)
@@ -922,14 +963,11 @@ class MapEditor(tk.Tk):
         floor = self.current_floor
         key = (cell[0], cell[1], facing)
         current = floor["signs"].get(key, "")
-        text = simpledialog.askstring(
-            "看板", f"{floor['id']} {cell} で{FACING_LABELS[facing]}を向いたときに表示する文字\n（空にすると削除）:",
-            initialvalue=current, parent=self)
-        if text is None:
+        dialog = SignDialog(self, f"看板 {floor['id']} {cell} {FACING_LABELS[facing]}向き",
+                            f"{floor['id']} {cell} で{FACING_LABELS[facing]}を向いたときに表示する文字:", current)
+        if dialog.result is None or dialog.result == current:
             return
-        text = text.strip()
-        if text == current:
-            return
+        text = "" if dialog.result == "delete" else dialog.result
         if text:
             self.expand_for_cell(cell)
             floor["signs"][key] = text
@@ -937,6 +975,8 @@ class MapEditor(tk.Tk):
         elif key in floor["signs"]:
             del floor["signs"][key]
             self.status.set(f"{floor['id']} {cell} {FACING_LABELS[facing]}向きの看板を削除しました。")
+        else:
+            return
         self.mark_changed()
         self.canvas.redraw()
 
@@ -970,6 +1010,18 @@ class MapEditor(tk.Tk):
 
     def erase_near(self, px: float, py: float, gx: float, gy: float) -> None:
         floor = self.current_floor
+        # 看板の札は境界のすぐ内側にあるので、境界線より先に判定する
+        for key in list(floor["signs"]):
+            sign_x, sign_y, facing = key
+            dx, dy = FACING_VECTORS[facing]
+            tag_x = GRID_ORIGIN + (sign_x + 0.5 + dx * 0.3) * CELL_SIZE
+            tag_y = GRID_ORIGIN + (sign_y + 0.5 + dy * 0.3) * CELL_SIZE
+            if abs(px - tag_x) <= 14 and abs(py - tag_y) <= 9:
+                text = floor["signs"].pop(key)
+                self.mark_changed()
+                self.status.set(f"看板「{text}」を削除しました。")
+                return
+
         nearest: tuple[float, tuple[str, int, int]] | None = None
         for edge in floor["edges"]:
             axis, ex, ey = edge
