@@ -17,6 +17,7 @@ EDGE_TYPES = {"wall", "door", "oneway"}
 ONEWAY_PREFIX = "oneway:"
 ONEWAY_COLOR = "#c0392b"
 OPPOSITE_FACING = {"N": "S", "S": "N", "E": "W", "W": "E"}
+WARP_COLOR = "#6a3fb5"
 DOOR_COLOR = "#f2c230"
 DOOR_OUTLINE = "#8a6400"
 SIGN_COLOR = "#fff1c8"
@@ -112,6 +113,8 @@ class MapCanvas(tk.Canvas):
         self.bind("<B1-Motion>", self._drag)
         self.bind("<ButtonRelease-1>", self._release)
         self.bind("<MouseWheel>", self._wheel_floor)
+        self.bind("<Motion>", self._hover)
+        self.bind("<Leave>", lambda _event: self.editor.cursor_cell.set(""))
         self.bind("<Configure>", lambda _event: self.redraw())
 
     def _press(self, event: tk.Event) -> None:
@@ -135,6 +138,13 @@ class MapCanvas(tk.Canvas):
             self.dragged = True
             self._apply_erase(x, y)
 
+    def _hover(self, event: tk.Event) -> None:
+        gx, gy = self._grid_position(self.canvasx(event.x), self.canvasy(event.y))
+        if gx >= 0 and gy >= 0 and self._in_work_area(gx, gy):
+            self.editor.cursor_cell.set(f"{self.editor.current_floor['id']}  x {int(gx)}, y {int(gy)}")
+        else:
+            self.editor.cursor_cell.set("")
+
     def _wheel_floor(self, event: tk.Event) -> str:
         self.editor.switch_floor_by_wheel(event.delta)
         return "break"
@@ -153,6 +163,8 @@ class MapCanvas(tk.Canvas):
             self._place_oneway(x, y)
         elif tool == "stair":
             self._place_cell_tool(x, y, self.editor.place_stair)
+        elif tool == "warp":
+            self._place_cell_tool(x, y, self.editor.place_warp)
         elif tool == "spawn":
             self._place_cell_tool(x, y, self.editor.place_spawn)
         elif tool == "event":
@@ -229,6 +241,13 @@ class MapCanvas(tk.Canvas):
         distance, edge = min(candidates, key=lambda candidate: candidate[0])
         if distance <= CELL_SIZE * 0.38:
             self._draw_edge(edge, kind)
+
+    def _label(self, x: float, y: float, text: str, color: str, background: str) -> None:
+        """背景付きの小さな文字ラベル（線や記号と重なっても読めるように）。"""
+        item = self.create_text(x, y, text=text, fill=color, font=("Segoe UI", 8, "bold"))
+        x1, y1, x2, y2 = self.bbox(item)
+        self.create_rectangle(x1 - 2, y1, x2 + 2, y2, fill=background, outline=color)
+        self.tag_raise(item)
 
     def _place_oneway(self, x: float, y: float) -> None:
         """一方通行の壁を置く。クリックした側から反対側へ通れる。既存の一方通行壁をクリックすると向きを反転。"""
@@ -350,13 +369,13 @@ class MapCanvas(tk.Canvas):
             x2, y2 = x1 + CELL_SIZE - 12, y1 + CELL_SIZE - 12
             if event["type"] == "warp":
                 # ワープ床: 紫の渦（同心円）と行き先
-                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-                self.create_oval(x1, y1, x2, y2, fill="#e3d4f7", outline="#6a3fb5", width=2)
-                self.create_oval(cx - 8, cy - 8, cx + 8, cy + 8, outline="#6a3fb5", width=2)
-                self.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill="#6a3fb5", outline="")
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2 - 5
+                self.create_oval(cx - 14, cy - 14, cx + 14, cy + 14, fill="#e3d4f7", outline=WARP_COLOR, width=2)
+                self.create_oval(cx - 7, cy - 7, cx + 7, cy + 7, outline=WARP_COLOR, width=2)
+                self.create_oval(cx - 2, cy - 2, cx + 2, cy + 2, fill=WARP_COLOR, outline="")
                 to = event["to"]
                 destination = f"→{to['floorId']} {to['locate'][0]},{to['locate'][1]}"
-                self.create_text(cx, y2 + 1, text=destination, fill="#4a2a85", font=("Segoe UI", 7, "bold"))
+                self._label(cx, y2 + 1, destination, WARP_COLOR, "#f4eefc")
             elif event["type"] == "recruit":
                 self.create_rectangle(x1, y1, x2, y2, fill="#c9f0cc", outline="#2e7d32", width=2)
                 self.create_text((x1 + x2) / 2, (y1 + y2) / 2, text="人", fill="#1b5e20",
@@ -381,6 +400,27 @@ class MapCanvas(tk.Canvas):
             x1, y1, x2, y2 = self.bbox(item)
             self.create_rectangle(x1 - 2, y1, x2 + 2, y2, fill=SIGN_COLOR, outline=SIGN_TEXT)
             self.tag_raise(item)
+
+        # ワープの着地点: 紫の破線の輪 + 「着」
+        arrivals: dict[tuple[int, int], int] = {}
+        for source in self.editor.floors:
+            for event in source["events"].values():
+                if event["type"] == "warp" and event["to"]["floorId"] == floor["id"]:
+                    cell = tuple(event["to"]["locate"])
+                    arrivals[cell] = arrivals.get(cell, 0) + 1
+        for (arrive_x, arrive_y), count in arrivals.items():
+            x1 = left + arrive_x * CELL_SIZE + 4
+            y1 = top + arrive_y * CELL_SIZE + 4
+            x2, y2 = x1 + CELL_SIZE - 8, y1 + CELL_SIZE - 8
+            self.create_oval(x1, y1, x2, y2, outline=WARP_COLOR, width=2, dash=(4, 3))
+            self._label(x2 - 4, y1 + 5, "着" if count == 1 else f"着×{count}", "white", WARP_COLOR)
+
+        pending_warp = self.editor.pending_warp
+        if pending_warp and pending_warp["floorId"] == floor["id"]:
+            cx = left + (pending_warp["locate"][0] + 0.5) * CELL_SIZE
+            cy = top + (pending_warp["locate"][1] + 0.5) * CELL_SIZE
+            self.create_oval(cx - 15, cy - 15, cx + 15, cy + 15, fill="#c7a8f0", outline=WARP_COLOR, width=2)
+            self.create_text(cx, cy, text="元", fill="#2c1557", font=("Segoe UI", 10, "bold"))
 
         for stair in self.editor.stairs:
             for end in stair["ends"]:
@@ -591,6 +631,8 @@ class MapEditor(tk.Tk):
         self.floor_choice = tk.StringVar()
         self.status = tk.StringVar(value="壁／ドアは境界線をドラッグして描きます。")
         self.pending_stair: dict[str, Any] | None = None
+        self.pending_warp: dict[str, Any] | None = None
+        self.cursor_cell = tk.StringVar()
         self.spawn: dict[str, Any] | None = None
         self.floors: list[dict[str, Any]] = [self._new_floor("1F", 1, 1)]
         self.stairs: list[dict[str, Any]] = []
@@ -701,6 +743,7 @@ class MapEditor(tk.Tk):
             ("oneway", "一方通行の壁（クリック）"),
             ("erase", "消去"),
             ("stair", "階段（両端を指定）"),
+            ("warp", "ワープ（元→先を指定）"),
             ("spawn", "ゲーム開始地点"),
             ("event", "イベント（メッセージ／宝箱／人間／ワープ）"),
             ("sign", "看板（立ち止まると表示）"),
@@ -722,6 +765,8 @@ class MapEditor(tk.Tk):
         self.map_label = ttk.Label(heading, text="", font=("Segoe UI", 11, "bold"))
         self.map_label.pack(side=tk.LEFT)
         ttk.Label(heading, text="左クリック／ドラッグで編集", foreground="#687078").pack(side=tk.RIGHT)
+        ttk.Label(heading, textvariable=self.cursor_cell, foreground="#244b91",
+                  font=("Segoe UI", 10, "bold")).pack(side=tk.RIGHT, padx=(0, 16))
 
         canvas_frame = ttk.Frame(area)
         canvas_frame.pack(fill=tk.BOTH, expand=True)
@@ -766,9 +811,15 @@ class MapEditor(tk.Tk):
         if self.tool.get() != "stair" and self.pending_stair:
             self.pending_stair = None
             self.canvas.redraw()
+        if self.tool.get() != "warp" and self.pending_warp:
+            self.pending_warp = None
+            self.canvas.redraw()
         labels = {"wall": "壁", "door": "ドア", "oneway": "一方通行の壁", "erase": "消去",
-                  "stair": "階段", "spawn": "ゲーム開始地点", "event": "イベント", "sign": "看板"}
-        self.status.set(f"{labels[self.tool.get()]}ツールを選択しました。")
+                  "stair": "階段", "warp": "ワープ", "spawn": "ゲーム開始地点", "event": "イベント", "sign": "看板"}
+        if self.tool.get() == "warp":
+            self.status.set("ワープ: ワープ元のセルをクリックしてください。")
+        else:
+            self.status.set(f"{labels[self.tool.get()]}ツールを選択しました。")
 
     def mark_changed(self) -> None:
         self.dirty = True
@@ -798,6 +849,40 @@ class MapEditor(tk.Tk):
             self.pending_stair = None
             self.mark_changed()
             self.status.set(f"階段 {stair_id} を双方向で接続しました。")
+        self.canvas.redraw()
+
+    def place_warp(self, cell: tuple[int, int]) -> None:
+        """1回目のクリックでワープ元、2回目（別フロア可）でワープ先を決めてワープ床を作る。"""
+        floor = self.current_floor
+        if self.pending_warp is None:
+            existing = floor["events"].get(cell)
+            if existing and existing["type"] != "warp" and not messagebox.askyesno(
+                    "イベントの置き換え",
+                    f"{cell} には{EVENT_TYPES[existing['type']]}イベントがあります。ワープに置き換えますか？", parent=self):
+                return
+            self.expand_for_cell(cell)
+            self.pending_warp = {"floorId": floor["id"], "locate": [cell[0], cell[1]]}
+            self.status.set(f"ワープ元: {floor['id']} {cell}。必要ならフロアを切り替えて、ワープ先のセルをクリックしてください。")
+        else:
+            source = self.pending_warp
+            if source["floorId"] == floor["id"] and source["locate"] == [cell[0], cell[1]]:
+                self.status.set("ワープ元と同じセルは指定できません。別のセルをクリックしてください。")
+                return
+            self.expand_for_cell(cell)
+            source_floor = next(f for f in self.floors if f["id"] == source["floorId"])
+            source_cell = (source["locate"][0], source["locate"][1])
+            previous = source_floor["events"].get(source_cell)
+            # 既存のワープを付け直すときは、文章と到着時の向きを引き継ぐ
+            event = {"type": "warp", "text": "", "to": {"floorId": floor["id"], "locate": [cell[0], cell[1]]}}
+            if previous and previous["type"] == "warp":
+                event["text"] = previous.get("text", "")
+                if "facing" in previous["to"]:
+                    event["to"]["facing"] = previous["to"]["facing"]
+            source_floor["events"][source_cell] = event
+            self.pending_warp = None
+            self.mark_changed()
+            self.status.set(f"ワープを作成しました: {source['floorId']} {source_cell} → {floor['id']} {cell}。"
+                            "文章や到着時の向きはイベントツールで編集できます。")
         self.canvas.redraw()
 
     def place_spawn(self, cell: tuple[int, int]) -> None:
@@ -977,6 +1062,7 @@ class MapEditor(tk.Tk):
         if self.spawn and self.spawn["floorId"] == floor["id"]:
             self.spawn = None
         self.pending_stair = None
+        self.pending_warp = None
         self.floor_choice.set(self.floors[0]["id"])
         self._refresh_floor_choices()
         self.mark_changed()
@@ -1047,6 +1133,7 @@ class MapEditor(tk.Tk):
         self.stairs = []
         self.spawn = None
         self.pending_stair = None
+        self.pending_warp = None
         self.map_path = None
         self.dirty = False
         self.floor_choice.set("1F")
@@ -1078,6 +1165,7 @@ class MapEditor(tk.Tk):
             return
         self.floors, self.stairs, self.spawn = floors, stairs, spawn
         self.pending_stair = None
+        self.pending_warp = None
         self.map_path = Path(filename)
         self.dirty = False
         self.floor_choice.set(floors[0]["id"])
